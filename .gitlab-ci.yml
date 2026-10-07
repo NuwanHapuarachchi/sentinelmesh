@@ -50,6 +50,7 @@ variables:
   TF_HTTP_PASSWORD: ${CI_JOB_TOKEN}
   TF_HTTP_RETRY_WAIT_MIN: "5"
   PIP_CACHE_DIR: ${CI_PROJECT_DIR}/.pip-cache
+  TF_VAR_rules_version: ${CI_COMMIT_SHORT_SHA}
 
 # Writes AWS profiles. Until the bootstrap stack has run (SM_AWS_DEPLOY_ROLE_ARN unset), every
 # job uses the project's AWS_* key directly. After bootstrap, app jobs use the CI user's key only

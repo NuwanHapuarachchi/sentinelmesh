@@ -21,3 +21,21 @@ variable "officer_email" {
   type        = string
   default     = ""
 }
+
+variable "sms_provider_url" {
+  description = "Third-party SMS gateway send URL. Empty = simulator. Set via TF_VAR_sms_provider_url."
+  type        = string
+  default     = ""
+}
+
+variable "sms_http_options" {
+  description = "SMS_HTTP_* settings for the gateway (field names, auth style); see services/common/sms.py."
+  type        = map(string)
+  default     = {}
+}
+
+variable "rules_version" {
+  description = "Git commit recorded in every decision record. Set by the pipeline."
+  type        = string
+  default     = "dev"
+}

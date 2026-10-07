@@ -41,12 +41,15 @@ module "cell" {
   source   = "../modules/cell"
   for_each = local.cells
 
-  cell         = each.key
-  prefix       = var.prefix
-  role_path    = local.role_path
-  boundary_arn = local.boundary_arn
-  zip_path     = data.archive_file.services.output_path
-  zip_hash     = data.archive_file.services.output_base64sha256
-  zones_table  = { name = module.shared.tables.zones, arn = module.shared.table_arns.zones }
-  state_table  = { name = module.shared.tables.zone_state, arn = module.shared.table_arns.zone_state }
+  cell          = each.key
+  prefix        = var.prefix
+  role_path     = local.role_path
+  boundary_arn  = local.boundary_arn
+  zip_path      = data.archive_file.services.output_path
+  zip_hash      = data.archive_file.services.output_base64sha256
+  zones_table   = { name = module.shared.tables.zones, arn = module.shared.table_arns.zones }
+  state_table   = { name = module.shared.tables.zone_state, arn = module.shared.table_arns.zone_state }
+  delivery      = local.delivery
+  sms_config    = local.sms_config
+  rules_version = var.rules_version
 }
