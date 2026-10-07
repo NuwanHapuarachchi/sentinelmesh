@@ -28,6 +28,12 @@ def test_polygons_are_closed_hexagons():
         assert len(poly) == 7 and poly[0] == poly[-1], z["zone_id"]
 
 
+def test_load_zones_are_hidden_and_split():
+    load = [z for z in ZONES if z["zone_id"].startswith("L")]
+    assert len(load) == 80 and all(z["is_test"] for z in load)
+    assert sum(z["owner_cell"] == "a" for z in load) == 40
+
+
 def test_test_zones_use_short_timers():
     for z in ZONES:
         if z["is_test"]:

@@ -36,6 +36,7 @@ TEST_ZONES = [
     ("H00", "a"),
 ]
 TEST_CENTRE = (6.45, 81.05)
+LOAD_CENTRE = (6.20, 81.20)
 
 
 def spiral(count):
@@ -112,6 +113,10 @@ def build():
     for i, (zone_id, owner) in enumerate(TEST_ZONES):
         lat, lon = centre_of(*TEST_CENTRE, i, 0, HEX_RADIUS_DEG)
         zones.append(zone_record(zone_id, f"Test {zone_id}", "Test", "flood", lat, lon, owner, True))
+    # Load-test zones (tests/load/burst.py): hidden, split across the two cells like the real ones.
+    for i in range(1, 81):
+        lat, lon = centre_of(*LOAD_CENTRE, i % 10, i // 10, HEX_RADIUS_DEG)
+        zones.append(zone_record(f"L{i:02d}", f"Load {i:02d}", "Load", "flood", lat, lon, "a" if i <= 40 else "b", True))
     return zones
 
 

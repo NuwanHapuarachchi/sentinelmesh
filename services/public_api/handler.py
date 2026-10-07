@@ -105,7 +105,7 @@ def public_zones():
     tiers = {i["zone_id"]: i for i in states.scan(ProjectionExpression="zone_id, tier, blind, updated_at")["Items"]}
     return respond(200, {"zones": [
         {"zone_id": z, "tier": s.get("tier", "normal"), "blind": bool(s.get("blind")), "updated_at": s.get("updated_at")}
-        for z, s in tiers.items() if not z.startswith(("T", "H"))
+        for z, s in tiers.items() if not z.startswith(("T", "H", "L"))
     ]})
 
 
