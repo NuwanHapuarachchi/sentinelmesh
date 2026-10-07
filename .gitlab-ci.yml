@@ -51,15 +51,19 @@ variables:
   TF_HTTP_RETRY_WAIT_MIN: "5"
   PIP_CACHE_DIR: ${CI_PROJECT_DIR}/.pip-cache
 
-# Writes AWS profiles. bootstrap uses the temporary admin key directly; app uses the CI user's
-# key only to assume the deploy role. Key variables are never exported as AWS_ACCESS_KEY_ID,
-# so the SDKs can't bypass the role.
+# Writes AWS profiles. Until the bootstrap stack has run (SM_AWS_DEPLOY_ROLE_ARN unset), every
+# job uses the project's AWS_* key directly. After bootstrap, app jobs use the CI user's key only
+# to assume the deploy role. Key variables are moved into profiles and removed from the
+# environment so the SDKs can't bypass the role.
 .aws_auth:
   script:
     - mkdir -p ~/.aws
     - |
-      if [ "$STACK" = "bootstrap" ]; then
-        printf '[bootstrap]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$BOOTSTRAP_AWS_ACCESS_KEY_ID" "$BOOTSTRAP_AWS_SECRET_ACCESS_KEY" > ~/.aws/credentials
+      BOOT_ID="${BOOTSTRAP_AWS_ACCESS_KEY_ID:-$AWS_ACCESS_KEY_ID}"
+      BOOT_SECRET="${BOOTSTRAP_AWS_SECRET_ACCESS_KEY:-$AWS_SECRET_ACCESS_KEY}"
+      unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+      if [ "$STACK" = "bootstrap" ] || [ -z "$SM_AWS_DEPLOY_ROLE_ARN" ]; then
+        printf '[bootstrap]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$BOOT_ID" "$BOOT_SECRET" > ~/.aws/credentials
         printf '[profile bootstrap]\nregion = %s\n' "$AWS_REGION" > ~/.aws/config
         export AWS_PROFILE=bootstrap
       else
@@ -91,9 +95,11 @@ variables:
   rules:
     - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
       when: never
-    - if: $STACK == "bootstrap" && ($BOOTSTRAP_AWS_ACCESS_KEY_ID == null || $GITLAB_TOKEN == null)
+    - if: $STACK == "bootstrap" && $BOOTSTRAP_AWS_ACCESS_KEY_ID == null && $AWS_ACCESS_KEY_ID == null
       when: never
-    - if: $STACK == "app" && $SM_AWS_ACCESS_KEY_ID == null
+    - if: $STACK == "bootstrap" && $GITLAB_TOKEN == null
+      when: never
+    - if: $STACK == "app" && $SM_AWS_ACCESS_KEY_ID == null && $AWS_ACCESS_KEY_ID == null
       when: never
 
 # ---------- lint & test (skipped on destroy runs) ----------
