@@ -1,9 +1,17 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_session_context" "pipeline" {
+  arn = data.aws_caller_identity.current.arn
+}
+
 locals {
   zones = jsondecode(file("${path.module}/data/zones.json"))
 
-  # Created by terraform/bootstrap; every workload role must carry it.
-  boundary_arn    = "arn:aws:iam::${var.account_id}:policy/${var.prefix}-workload-boundary"
-  deploy_role_arn = "arn:aws:iam::${var.account_id}:role/${var.prefix}-deploy"
+  boundary_arn = aws_iam_policy.workload_boundary.arn
+
+  # Principal allowed to delete decision records (teardown): whoever runs Terraform, as an IAM
+  # user or role ARN (session ARNs are resolved to their role).
+  deploy_role_arn = data.aws_iam_session_context.pipeline.issuer_arn
 }
 
 module "shared" {

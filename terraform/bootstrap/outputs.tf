@@ -7,5 +7,5 @@ output "ci_user_arn" {
 }
 
 output "workload_boundary_arn" {
-  value = aws_iam_policy.workload_boundary.arn
+  value = data.aws_iam_policy.workload_boundary.arn
 }

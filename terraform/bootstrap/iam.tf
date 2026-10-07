@@ -28,27 +28,10 @@ resource "aws_iam_user_policy" "ci_assume_deploy" {
   })
 }
 
-# Every role the app stack creates must carry this boundary, so workloads can never touch IAM.
-resource "aws_iam_policy" "workload_boundary" {
-  name        = "${var.prefix}-workload-boundary"
-  description = "Permissions boundary for SentinelMesh workload roles"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "AllowWorkloadServices"
-        Effect   = "Allow"
-        Action   = "*"
-        Resource = "*"
-      },
-      {
-        Sid      = "DenyIdentityAndAccountChanges"
-        Effect   = "Deny"
-        Action   = ["iam:*", "organizations:*", "account:*"]
-        Resource = "*"
-      },
-    ]
-  })
+# The workload boundary is created by the app stack (terraform/app/iam.tf); the deploy role may only
+# create roles that carry it.
+data "aws_iam_policy" "workload_boundary" {
+  arn = "${local.iam_arn}:policy${local.workload_path}${var.prefix}-workload-boundary"
 }
 
 # The role every app-stack job assumes. Trust is limited to the CI user; sessions last at most 1 hour.
@@ -90,7 +73,7 @@ resource "aws_iam_role_policy" "deploy_scoped_iam" {
           "iam:DeleteRolePolicy",
         ]
         Resource  = local.workload_roles
-        Condition = { StringEquals = { "iam:PermissionsBoundary" = aws_iam_policy.workload_boundary.arn } }
+        Condition = { StringEquals = { "iam:PermissionsBoundary" = data.aws_iam_policy.workload_boundary.arn } }
       },
       {
         Sid    = "ManageWorkloadRoles"
