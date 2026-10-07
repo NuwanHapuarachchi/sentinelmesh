@@ -1,15 +1,21 @@
-output "tables" {
-  value = {
-    zones      = aws_dynamodb_table.zones.name
-    zone_state = aws_dynamodb_table.zone_state.name
+locals {
+  all_tables = {
+    zones       = aws_dynamodb_table.zones
+    zone_state  = aws_dynamodb_table.zone_state
+    alerts      = aws_dynamodb_table.alerts
+    approvals   = aws_dynamodb_table.approvals
+    subscribers = aws_dynamodb_table.subscribers
+    inbox       = aws_dynamodb_table.inbox
+    ratelimits  = aws_dynamodb_table.ratelimits
   }
 }
 
+output "tables" {
+  value = { for k, t in local.all_tables : k => t.name }
+}
+
 output "table_arns" {
-  value = {
-    zones      = aws_dynamodb_table.zones.arn
-    zone_state = aws_dynamodb_table.zone_state.arn
-  }
+  value = { for k, t in local.all_tables : k => t.arn }
 }
 
 output "buckets" {
