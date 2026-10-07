@@ -205,7 +205,8 @@ def next_tier(current, candidate, score, agreeing, pending_down_since, now, hold
     return current, pending_down_since
 
 
-def execution_name(zone_id, tier, episode, drill=False):
-    """Deterministic Step Functions execution name: retries and duplicate triggers collapse into one."""
-    name = f"{zone_id}-{tier}-e{episode}" + ("-d" if drill else "")
+def execution_name(zone_id, tier, episode, episode_started=0, drill=False):
+    """Deterministic within an episode (retries and duplicate triggers collapse into one), unique across
+    episodes: the start time keeps a reset zone from colliding with an old, finished execution."""
+    name = f"{zone_id}-{tier}-e{episode}-{int(episode_started)}" + ("-d" if drill else "")
     return name[:80]

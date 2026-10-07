@@ -69,4 +69,5 @@ def evaluate(zone, doc, previous_tier, now):
     # A new alert episode starts when the zone climbs from below advisory to advisory or above.
     if went_up and sc.RANK[tier] >= sc.RANK["advisory"] and sc.RANK[previous_tier] < sc.RANK["advisory"]:
         doc["episode"] += 1
+        doc["episode_started"] = int(now)
     return a, tier, went_up

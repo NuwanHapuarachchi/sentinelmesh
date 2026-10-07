@@ -140,7 +140,7 @@ def start_escalation(zone, tier, assessment, doc, observations, drill, now):
         "origin": "scorer",
         "cell": CELL,
     }
-    name = sc.execution_name(zone["zone_id"], tier, doc["episode"], drill)
+    name = sc.execution_name(zone["zone_id"], tier, doc["episode"], doc.get("episode_started", 0), drill)
     try:
         sfn.start_execution(stateMachineArn=STATE_MACHINE_ARN, name=name, input=json.dumps(payload))
         log("escalation_started", zone_id=zone["zone_id"], tier=tier, execution=name)

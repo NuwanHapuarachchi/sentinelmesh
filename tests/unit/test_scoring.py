@@ -145,6 +145,11 @@ def test_deadband_score_holds_current_tier():
 
 
 def test_execution_name_is_deterministic_and_short():
-    assert sc.execution_name("Z01", "warning", 3) == "Z01-warning-e3"
-    assert sc.execution_name("Z01", "warning", 3, drill=True) == "Z01-warning-e3-d"
-    assert len(sc.execution_name("Z" * 100, "imminent", 1)) <= 80
+    assert sc.execution_name("Z01", "warning", 3, 1791392551) == "Z01-warning-e3-1791392551"
+    assert sc.execution_name("Z01", "warning", 3, 1791392551, drill=True) == "Z01-warning-e3-1791392551-d"
+    assert len(sc.execution_name("Z" * 100, "imminent", 1, 1791392551)) <= 80
+
+
+def test_execution_name_differs_after_a_reset():
+    # Same zone, tier and episode number, but a new episode start: must not collide with the old run.
+    assert sc.execution_name("T01", "warning", 1, 1000) != sc.execution_name("T01", "warning", 1, 2000)
