@@ -54,4 +54,6 @@ module "cell" {
   delivery      = local.delivery
   sms_config    = local.sms_config
   rules_version = var.rules_version
+
+  evidence_bucket = { name = module.shared.buckets.evidence, arn = module.shared.bucket_arns.evidence }
 }
