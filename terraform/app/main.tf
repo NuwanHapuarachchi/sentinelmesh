@@ -21,6 +21,8 @@ module "shared" {
   account_id      = var.account_id
   zones           = local.zones
   deploy_role_arn = local.deploy_role_arn
+
+  web_distribution_arn = aws_cloudfront_distribution.web.arn
 }
 
 # One zip for every function; handlers differ. The plan job passes build/ to the apply job.

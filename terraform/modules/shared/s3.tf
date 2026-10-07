@@ -66,6 +66,26 @@ data "aws_iam_policy_document" "tls_only" {
     }
   }
 
+  # The web bucket is private; only our CloudFront distribution may read it.
+  dynamic "statement" {
+    for_each = each.key == "web" ? [1] : []
+    content {
+      sid       = "CloudFrontRead"
+      effect    = "Allow"
+      actions   = ["s3:GetObject"]
+      resources = ["${each.value.arn}/*"]
+      principals {
+        type        = "Service"
+        identifiers = ["cloudfront.amazonaws.com"]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "AWS:SourceArn"
+        values   = [var.web_distribution_arn]
+      }
+    }
+  }
+
   # Decision records are tamper-resistant without retention dates: new objects only
   # (conditional writes), and only the pipeline role may delete (for teardown).
   dynamic "statement" {
