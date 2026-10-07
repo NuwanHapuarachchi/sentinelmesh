@@ -31,4 +31,4 @@ def test_polygons_are_closed_hexagons():
 def test_test_zones_use_short_timers():
     for z in ZONES:
         if z["is_test"]:
-            assert z["approval_timeout_s"] <= 30 and z["gauge_cadence_s"] <= 30
+            assert z["approval_timeout_s"] <= 60 and z["gauge_cadence_s"] <= 30

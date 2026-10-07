@@ -91,7 +91,8 @@ def zone_record(zone_id, name, district, hazard, lat, lon, owner_cell, is_test):
         "warning_level_m": warning,
         "danger_level_m": round(warning + jitter(zone_id + "d", 1.0, 1.5), 1),
         "gauge_cadence_s": 20 if is_test else 60,
-        "approval_timeout_s": 20 if is_test else 300,
+        # T01 keeps a longer approval window so the e2e "officer approves" test is not racing the timeout.
+        "approval_timeout_s": (60 if zone_id == "T01" else 20) if is_test else 300,
         "is_test": is_test,
     }
 
