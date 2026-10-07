@@ -44,8 +44,8 @@ async function boot() {
 
 function drawMap() {
   map = L.map("map", { zoomControl: true }).setView([6.95, 80.35], 10);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-    attribution: "© OpenStreetMap contributors © CARTO", maxZoom: 14,
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Tiles © Esri, HERE, Garmin, © OpenStreetMap contributors", maxZoom: 16,
   }).addTo(map);
   const features = geo.features.filter((f) => !f.properties.is_test);
   const group = L.geoJSON({ type: "FeatureCollection", features }, {
