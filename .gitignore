@@ -17,3 +17,6 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+
+# Lambda bundle built by Terraform
+terraform/app/build/
