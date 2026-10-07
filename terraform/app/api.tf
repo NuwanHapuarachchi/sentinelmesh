@@ -153,17 +153,43 @@ resource "aws_cognito_user_group" "groups" {
   user_pool_id = aws_cognito_user_pool.officers.id
 }
 
-# Team accounts from TF_VAR_officers = {"email": "duty_officer" | "viewer"}. Cognito emails each person
-# a temporary password; nobody else ever sees it.
+# Team accounts from TF_VAR_officers = {"email": "duty_officer" | "viewer"}. The demo addresses are not
+# real inboxes, so no invite email is sent: Terraform sets a random password and stores the logins in
+# Secrets Manager, where the team reads them in the AWS console. They never appear in logs or chat.
+resource "random_password" "officer" {
+  for_each         = var.officers
+  length           = 20
+  min_upper        = 2
+  min_lower        = 2
+  min_numeric      = 2
+  special          = true
+  override_special = "!#%*-_+"
+}
+
 resource "aws_cognito_user" "officer" {
-  for_each     = var.officers
-  user_pool_id = aws_cognito_user_pool.officers.id
-  username     = each.key
+  for_each       = var.officers
+  user_pool_id   = aws_cognito_user_pool.officers.id
+  username       = each.key
+  password       = random_password.officer[each.key].result
+  message_action = "SUPPRESS"
   attributes = {
     email          = each.key
     email_verified = true
   }
-  desired_delivery_mediums = ["EMAIL"]
+}
+
+resource "aws_secretsmanager_secret" "officer_logins" {
+  name                    = "${var.prefix}/officer-logins"
+  description             = "SentinelMesh console logins (email => password and group)"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "officer_logins" {
+  secret_id = aws_secretsmanager_secret.officer_logins.id
+  secret_string = jsonencode({ for email, group in var.officers : email => {
+    password = random_password.officer[email].result
+    group    = group
+  } })
 }
 
 resource "aws_cognito_user_in_group" "officer" {
