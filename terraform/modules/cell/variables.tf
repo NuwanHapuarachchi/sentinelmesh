@@ -57,3 +57,7 @@ variable "rules_version" {
   type        = string
   default     = "dev"
 }
+
+variable "evidence_bucket" {
+  type = object({ name = string, arn = string })
+}
