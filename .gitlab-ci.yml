@@ -1,0 +1,257 @@
+spec:
+  inputs:
+    stack:
+      description: "app = the prototype. bootstrap = the pipeline's own AWS identity (needs BOOTSTRAP_AWS_* and GITLAB_TOKEN)."
+      options: [app, bootstrap]
+      default: app
+    action:
+      description: "plan = preview only. apply = create/update now. destroy = delete everything now."
+      options: [plan, apply, destroy]
+      default: plan
+    run_e2e:
+      description: "Run end-to-end tests after an app apply."
+      type: boolean
+      default: true
+    run_load_test:
+      description: "Run the burst load test after an app apply."
+      type: boolean
+      default: false
+---
+include:
+  - template: Jobs/SAST-IaC.gitlab-ci.yml
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+stages: [lint, test, plan, deploy, verify]
+
+variables:
+  STACK: $[[ inputs.stack ]]
+  ACTION: $[[ inputs.action ]]
+  RUN_E2E: "$[[ inputs.run_e2e ]]"
+  RUN_LOAD_TEST: "$[[ inputs.run_load_test ]]"
+  AWS_REGION: ap-southeast-2
+  AWS_DEFAULT_REGION: ap-southeast-2
+  TF_DIR: terraform/${STACK}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_PLUGIN_CACHE_DIR: ${CI_PROJECT_DIR}/.terraform-plugin-cache
+  # GitLab-managed state, one per stack, authenticated with the job token.
+  TF_HTTP_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${STACK}
+  TF_HTTP_LOCK_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${STACK}/lock
+  TF_HTTP_UNLOCK_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${STACK}/lock
+  TF_HTTP_LOCK_METHOD: POST
+  TF_HTTP_UNLOCK_METHOD: DELETE
+  TF_HTTP_USERNAME: gitlab-ci-token
+  TF_HTTP_PASSWORD: ${CI_JOB_TOKEN}
+  TF_HTTP_RETRY_WAIT_MIN: "5"
+  PIP_CACHE_DIR: ${CI_PROJECT_DIR}/.pip-cache
+
+# Writes AWS profiles. bootstrap uses the temporary admin key directly; app uses the CI user's
+# key only to assume the deploy role. Key variables are never exported as AWS_ACCESS_KEY_ID,
+# so the SDKs can't bypass the role.
+.aws_auth:
+  script:
+    - mkdir -p ~/.aws
+    - |
+      if [ "$STACK" = "bootstrap" ]; then
+        printf '[bootstrap]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$BOOTSTRAP_AWS_ACCESS_KEY_ID" "$BOOTSTRAP_AWS_SECRET_ACCESS_KEY" > ~/.aws/credentials
+        printf '[profile bootstrap]\nregion = %s\n' "$AWS_REGION" > ~/.aws/config
+        export AWS_PROFILE=bootstrap
+      else
+        printf '[ci]\naws_access_key_id = %s\naws_secret_access_key = %s\n' "$SM_AWS_ACCESS_KEY_ID" "$SM_AWS_SECRET_ACCESS_KEY" > ~/.aws/credentials
+        printf '[profile ci]\nregion = %s\n\n[profile deploy]\nregion = %s\nrole_arn = %s\nsource_profile = ci\nrole_session_name = gitlab-%s-%s\nduration_seconds = 3600\n' \
+          "$AWS_REGION" "$AWS_REGION" "$SM_AWS_DEPLOY_ROLE_ARN" "$CI_PIPELINE_ID" "$CI_JOB_ID" > ~/.aws/config
+        export AWS_PROFILE=deploy
+      fi
+
+.tf:
+  image:
+    name: hashicorp/terraform:1.16.5
+    entrypoint: [""]
+  cache:
+    key: tf-providers-v1
+    paths: [.terraform-plugin-cache]
+  before_script:
+    - mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+.py:
+  image: python:3.13-slim
+  cache:
+    key: pip-v1
+    paths: [.pip-cache]
+
+# Only main can reach AWS (the credential variables are protected), and only once the
+# stack's credentials exist.
+.aws_rules:
+  rules:
+    - if: $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - if: $STACK == "bootstrap" && ($BOOTSTRAP_AWS_ACCESS_KEY_ID == null || $GITLAB_TOKEN == null)
+      when: never
+    - if: $STACK == "app" && $SM_AWS_ACCESS_KEY_ID == null
+      when: never
+
+# ---------- lint & test (skipped on destroy runs) ----------
+
+tf-lint:
+  extends: .tf
+  stage: lint
+  interruptible: true
+  rules:
+    - if: $ACTION == "destroy"
+      when: never
+    - when: on_success
+  script:
+    - terraform fmt -check -recursive -diff terraform
+    - for d in terraform/bootstrap terraform/app; do terraform -chdir=$d init -backend=false && terraform -chdir=$d validate; done
+
+py-lint:
+  extends: .py
+  stage: lint
+  interruptible: true
+  rules:
+    - if: $ACTION == "destroy"
+      when: never
+    - when: on_success
+  script:
+    - pip install -q ruff==0.14.0
+    - ruff check services tests scripts
+
+unit-tests:
+  extends: .py
+  stage: test
+  interruptible: true
+  rules:
+    - if: $ACTION == "destroy"
+      when: never
+    - when: on_success
+  script:
+    - pip install -q -r tests/requirements.txt
+    - pytest tests/unit -q --junitxml=report-unit.xml --cov=services --cov-report=term --cov-report=xml:coverage.xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    when: always
+    reports:
+      junit: report-unit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+# The IaC security scan only needs to run when code changes, not on apply/destroy runs.
+kics-iac-sast:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# ---------- plan & deploy ----------
+
+plan:
+  extends: .tf
+  stage: plan
+  resource_group: terraform
+  rules:
+    - !reference [.aws_rules, rules]
+    - when: on_success
+  script:
+    - !reference [.aws_auth, script]
+    - terraform -chdir=$TF_DIR init
+    - |
+      if [ "$ACTION" = "destroy" ]; then MODE="-destroy"; else MODE=""; fi
+      terraform -chdir=$TF_DIR plan $MODE -lock-timeout=5m -out=plan.cache | tee plan.log
+      terraform -chdir=$TF_DIR show -no-color plan.cache > plan.txt
+    - grep -E "^(Plan:|No changes)" plan.log || true
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - terraform/app/plan.cache
+      - terraform/bootstrap/plan.cache
+      - terraform/app/.terraform.lock.hcl
+      - terraform/bootstrap/.terraform.lock.hcl
+      - plan.txt
+
+apply:
+  extends: .tf
+  stage: deploy
+  resource_group: terraform
+  needs: [plan]
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $ACTION == "apply"
+  script:
+    - !reference [.aws_auth, script]
+    - terraform -chdir=$TF_DIR init
+    - terraform -chdir=$TF_DIR apply -lock-timeout=5m plan.cache
+    - |
+      if [ "$STACK" = "app" ]; then
+        terraform -chdir=$TF_DIR output -json > outputs.json
+        echo "DASHBOARD_URL=$(terraform -chdir=$TF_DIR output -raw dashboard_url 2>/dev/null || echo "$CI_PROJECT_URL")" > deploy.env
+      else
+        echo "DASHBOARD_URL=$CI_PROJECT_URL" > deploy.env
+      fi
+  artifacts:
+    expire_in: 1 day
+    paths: [outputs.json]
+    reports:
+      dotenv: deploy.env
+  environment:
+    name: $STACK
+    url: $DASHBOARD_URL
+
+destroy:
+  extends: .tf
+  stage: deploy
+  resource_group: terraform
+  needs: [plan]
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $ACTION == "destroy"
+  script:
+    - !reference [.aws_auth, script]
+    - terraform -chdir=$TF_DIR init
+    - terraform -chdir=$TF_DIR apply -lock-timeout=5m plan.cache
+
+# ---------- verify ----------
+
+e2e:
+  extends: .py
+  stage: verify
+  needs: [apply]
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $ACTION == "apply" && $STACK == "app" && $RUN_E2E == "true"
+  script:
+    - !reference [.aws_auth, script]
+    - pip install -q -r tests/requirements.txt
+    - if [ -d tests/e2e ] && ls tests/e2e/test_*.py >/dev/null 2>&1; then pytest tests/e2e -v --junitxml=report-e2e.xml -p no:cacheprovider -o testpaths=tests/e2e; else echo "no e2e tests yet"; fi
+  artifacts:
+    when: always
+    reports:
+      junit: report-e2e.xml
+
+load-test:
+  extends: .py
+  stage: verify
+  needs: [apply]
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $ACTION == "apply" && $STACK == "app" && $RUN_LOAD_TEST == "true"
+  script:
+    - !reference [.aws_auth, script]
+    - pip install -q -r tests/requirements.txt
+    - python tests/load/burst.py
+
+verify-teardown:
+  extends: .py
+  stage: verify
+  needs: [destroy]
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $ACTION == "destroy"
+  script:
+    - !reference [.aws_auth, script]
+    - pip install -q boto3==1.40.40
+    - python scripts/verify_teardown.py --stack $STACK
