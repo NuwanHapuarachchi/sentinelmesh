@@ -92,11 +92,15 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
                 reason=assessment.reason, agreeing=assessment.agreeing)
 
         doc["contributions"], doc["agreeing"], doc["reason"] = assessment.contributions, assessment.agreeing, assessment.reason
+        update = ("SET version = :nv, tier = :t, score = :s, blind = :b, hazard = :h, doc = :d, "
+                  "updated_at = :u, eval_cell = :c, district = :dist")
+        # Falling below advisory closes the alert episode: clear the workflow's de-duplication gate.
+        if sc.RANK[tier] < sc.RANK["advisory"] <= sc.RANK[previous_tier]:
+            update += " REMOVE alert_rank, alert_tier, alert_exec"
         try:
             state_table.update_item(
                 Key={"zone_id": zone_id},
-                UpdateExpression="SET version = :nv, tier = :t, score = :s, blind = :b, hazard = :h, doc = :d, "
-                "updated_at = :u, eval_cell = :c, district = :dist",
+                UpdateExpression=update,
                 ConditionExpression="attribute_not_exists(version) OR version = :v",
                 ExpressionAttributeValues={
                     ":nv": version + 1, ":v": version, ":t": tier, ":s": Decimal(str(assessment.score)),
