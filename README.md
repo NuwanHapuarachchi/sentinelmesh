@@ -1,93 +1,57 @@
-# sentinelmesh
+# SentinelMesh
 
-SentinelMesh - Beauty of Cloud 2.0 prototype (TheByteForce). Terraform IaC, state in GitLab.
+Multi-hazard early warning and alert delivery prototype for **Beauty of Cloud 2.0** (Scenario 1), team **TheByteForce**.
 
-## Getting started
+Everything is Terraform and everything runs in GitLab CI/CD. Nobody provisions from a laptop.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Layout
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+| Path | What |
+|---|---|
+| `terraform/bootstrap/` | The pipeline's own AWS identity: CI user, deploy role, workload permissions boundary, and the GitLab CI variables that hold the CI key |
+| `terraform/app/` | The prototype (root module) |
+| `terraform/modules/` | `shared`, and later `cell`, `api`, `web`, `observability` |
+| `services/` | Lambda code (Python 3.13, stdlib + boto3) |
+| `web/` | Dashboard, officer console, simulated phone |
+| `tests/unit`, `tests/e2e`, `tests/load` | Tests run by the pipeline |
+| `scripts/gen_zones.py` | Generates the 80 hazard zones + test zones |
+| `scripts/verify_teardown.py` | Read-only check that nothing is left after a destroy |
 
-## Add your files
+## Account rules
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+- Region `ap-southeast-2` only (organization policy).
+- No retention anywhere: no Object Lock, no customer-managed KMS keys, no PITR, secrets deleted immediately. `terraform destroy` removes everything.
 
+## Running the pipeline
+
+**Build → Pipelines → Run pipeline** on `main`, then pick the inputs:
+
+| Input | Values |
+|---|---|
+| `stack` | `app` (default) or `bootstrap` |
+| `action` | `plan` (default), `apply`, `destroy`. Apply and destroy run straight after the plan |
+| `run_e2e` | run end-to-end tests after an app apply (default on) |
+| `run_load_test` | run the burst test after an app apply (default off) |
+
+Or from a terminal:
+
+```bash
+glab ci run -b main --input stack:string(app) --input action:string(apply)
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/NuwanHapuarachchi/sentinelmesh.git
-git branch -M main
-git push -uf origin main
-```
 
-## Integrate with your tools
+Pushes to `main` run lint, unit tests, the IaC scan and an app plan. Other branches and MRs run lint and tests only; they never get AWS credentials.
 
-* [Set up project integrations](https://gitlab.com/NuwanHapuarachchi/sentinelmesh/-/settings/integrations)
+## One-time setup
 
-## Collaborate with your team
+1. In the IAM console, create a temporary access key on an admin user. Add it in **Settings → CI/CD → Variables** as `BOOTSTRAP_AWS_ACCESS_KEY_ID` (masked, protected) and `BOOTSTRAP_AWS_SECRET_ACCESS_KEY` (masked, hidden, protected).
+2. Create a GitLab personal access token with `api` scope. Add it as `GITLAB_TOKEN` (masked, hidden, protected).
+3. Run the pipeline with `stack=bootstrap`, `action=apply`. Terraform creates the CI user and deploy role and writes `SM_AWS_ACCESS_KEY_ID`, `SM_AWS_SECRET_ACCESS_KEY` and `SM_AWS_DEPLOY_ROLE_ARN` into the project variables.
+4. Delete the temporary admin key and the `BOOTSTRAP_*` variables.
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+Optional variables: `TF_VAR_officer_email` (alerts and Cognito invite), `SMS_PROVIDER_URL` and `SMS_PROVIDER_API_KEY` (third-party SMS, later).
 
-## Test and Deploy
+## Teardown after the competition
 
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+1. Run `stack=app`, `action=destroy`. The `verify-teardown` job must pass.
+2. Add a temporary admin key as `BOOTSTRAP_*` again and run `stack=bootstrap`, `action=destroy`. This removes the CI user, role, boundary and the `SM_AWS_*` variables.
+3. Delete the admin key, the `BOOTSTRAP_*` and `GITLAB_TOKEN` variables, and revoke the token. Optionally delete the Terraform states under **Operate → Terraform states**.
