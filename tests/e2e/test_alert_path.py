@@ -66,11 +66,12 @@ def test_corroborated_warning_approved_reaches_phone(aws, publish, reset_zone, s
     resp = aws["lambda"].invoke(FunctionName="sentinelmesh-approvals", Payload=json.dumps(event))
     assert json.loads(json.loads(resp["Payload"].read())["body"])["decision"] == "approve"
 
-    alert = wait_for(lambda: alerts_for(aws, "T01", since))[0]
-    assert alert["tier"] == "warning" and alert["mode"] == "approve" and alert["status"] == "Test"
-    msgs = wait_for(lambda: table(aws, "inbox").query(KeyConditionExpression=Key("subscriber_id").eq(sid))["Items"])
-    assert msgs[0]["alert_id"] == alert["alert_id"]
-    assert msgs[0]["lang"] == "si"
+    # Readings arrive one by one, so the zone may pass through advisory first; take the warning alert.
+    alert = wait_for(lambda: [a for a in alerts_for(aws, "T01", since) if a["tier"] == "warning"])[0]
+    assert alert["mode"] == "approve" and alert["status"] == "Test"
+    msg = wait_for(lambda: [m for m in table(aws, "inbox").query(KeyConditionExpression=Key("subscriber_id").eq(sid))["Items"]
+                            if m["alert_id"] == alert["alert_id"]])[0]
+    assert msg["lang"] == "si"
     # CAP 1.2 file published for the alert
     aws["s3"].head_object(Bucket=f"sentinelmesh-web-{aws['s'].client('sts').get_caller_identity()['Account']}",
                           Key=alert["cap_key"])
@@ -82,8 +83,7 @@ def test_unanswered_warning_is_issued_after_timeout(aws, publish, reset_zone):
     publish("T02", "gauge", level_m=gauge_level(aws, "T02", 0.8))
     publish("T02", "forecast", fc_rain_24h_mm=90)
     report(publish, "T02", 2)
-    alert = wait_for(lambda: alerts_for(aws, "T02", since), timeout=120)[0]
-    assert alert["tier"] == "warning"
+    alert = wait_for(lambda: [a for a in alerts_for(aws, "T02", since) if a["tier"] == "warning"], timeout=120)[0]
     assert alert["mode"] == "timeout"
 
 
