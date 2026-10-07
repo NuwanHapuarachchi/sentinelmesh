@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SentinelMesh Console</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">SentinelMesh <small>Kelani and Kalu basins, 80 hazard zones</small></div>
+    <nav>
+      <a href="phone.html" target="_blank" rel="noopener">Open a test phone</a>
+      <span id="who" class="who">Public view</span>
+      <button id="login">Sign in as officer</button>
+      <button id="logout" hidden>Sign out</button>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="mapwrap" aria-label="Zone map"><div id="map"></div></section>
+
+    <aside class="panel">
+      <section>
+        <h2>Zones by risk level</h2>
+        <div class="gauge" aria-label="Number of zones at each risk level">
+          <div class="post" id="post"></div>
+          <div class="marks" id="marks"></div>
+        </div>
+        <p class="muted" id="updated">Loading zones…</p>
+      </section>
+
+      <section id="zonecard" hidden aria-live="polite">
+        <p class="zone-name" id="zonetitle"></p>
+        <div id="zonedetail"></div>
+      </section>
+
+      <section class="officer" hidden>
+        <h2>Warnings waiting for you</h2>
+        <div id="approvals"><p class="muted">Nothing to approve. Warnings that need a decision appear here with a countdown.</p></div>
+      </section>
+
+      <section class="officer" hidden>
+        <h2>Run a drill</h2>
+        <div class="row">
+          <select id="scenario" aria-label="Drill">
+            <option value="flood_corroboration">Sources agree: warning, then imminent</option>
+            <option value="single_gauge">One gauge alone stays at watch</option>
+            <option value="sensor_silence">Gauge rises, then goes silent</option>
+            <option value="dam_surge_bypass">Surge past the danger level</option>
+          </select>
+          <select id="drillzone" aria-label="Zone"></select>
+        </div>
+        <div class="row"><button class="primary" id="rundrill">Start drill</button></div>
+        <h2>Cells</h2>
+        <div class="row">
+          <button data-cell="a" data-act="failover">Move cell A zones to cell B</button>
+          <button class="quiet" data-cell="a" data-act="restore">Return zones to cell A</button>
+        </div>
+        <p id="opsmsg" class="muted" aria-live="polite"></p>
+      </section>
+
+      <section>
+        <h2>Alerts issued</h2>
+        <div id="alerts"><p class="muted">Sign in to see alerts and who received them.</p></div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="auth.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

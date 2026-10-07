@@ -1,0 +1,100 @@
+/* SentinelMesh console: a duty officer's flood chart. Mist paper, river ink, signage tier ramp. */
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600&display=swap");
+
+:root {
+  --mist: #e9eff1;
+  --paper: #ffffff;
+  --ink: #12324a;
+  --ink-soft: #4d6676;
+  --river: #2f6f8f;
+  --rule: #cfdbe0;
+  --normal: #c9d6dc;
+  --watch: #e7c84b;
+  --advisory: #e8913a;
+  --warning: #d14b3d;
+  --imminent: #7d1220;
+  --blind: #6b5ca5;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Source Sans 3", "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--mist); color: var(--ink); font: 15px/1.5 var(--body); }
+a { color: var(--river); }
+:focus-visible { outline: 3px solid var(--river); outline-offset: 2px; }
+
+button, select {
+  font: 600 14px var(--body); color: var(--ink); background: var(--paper);
+  border: 1.5px solid var(--ink); border-radius: 3px; padding: 6px 12px; cursor: pointer;
+}
+button:hover { background: var(--ink); color: var(--paper); }
+button.primary { background: var(--river); border-color: var(--river); color: var(--paper); }
+button.primary:hover { background: var(--ink); border-color: var(--ink); }
+button.quiet { border-color: var(--rule); }
+
+.bar {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 10px 20px; background: var(--ink); color: var(--paper);
+}
+.brand { font: 700 26px/1 var(--display); letter-spacing: .01em; }
+.brand small { font: 400 14px var(--body); color: #a9c1cd; margin-left: 10px; }
+nav { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+nav a { color: #cfe3ec; }
+nav button { background: transparent; color: var(--paper); border-color: #6f93a6; }
+nav button:hover { background: var(--paper); color: var(--ink); }
+.who { color: #a9c1cd; font-size: 14px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; height: calc(100vh - 50px); }
+.mapwrap { position: relative; border-right: 1.5px solid var(--ink); }
+#map { position: absolute; inset: 0; background: #dfe8eb; }
+
+/* The staff gauge: a river measuring post, one band per tier, counts beside it. */
+.gauge { display: grid; grid-template-columns: 34px 1fr; gap: 0 12px; margin: 4px 0 6px; }
+.gauge .post { display: flex; flex-direction: column-reverse; border: 1.5px solid var(--ink); }
+.gauge .post div { flex: 1; min-height: 30px; border-top: 1.5px solid var(--ink); }
+.gauge .post div:last-child { border-top: none; }
+.gauge .marks { display: flex; flex-direction: column-reverse; }
+.gauge .marks div { flex: 1; min-height: 30px; display: flex; align-items: center; gap: 10px; border-top: 1px dashed var(--rule); }
+.gauge .marks div:last-child { border-top: none; }
+.gauge b { font: 700 28px/1 var(--display); min-width: 32px; }
+.gauge span { color: var(--ink-soft); }
+
+.panel { overflow-y: auto; background: var(--paper); padding: 18px 20px 40px; }
+.panel section { padding: 14px 0; border-top: 1.5px solid var(--rule); }
+.panel section:first-child { border-top: none; padding-top: 0; }
+.panel h2 { font: 600 22px/1.1 var(--display); margin: 0 0 10px; }
+.muted { color: var(--ink-soft); margin: 0; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.row select { flex: 1; min-width: 0; }
+
+.zone-name { font: 700 30px/1 var(--display); margin: 0; }
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; margin: 10px 0 0; }
+.kv dt { color: var(--ink-soft); }
+.kv dd { margin: 0; }
+.bars { display: grid; grid-template-columns: 70px 1fr 40px; gap: 4px 8px; align-items: center; margin-top: 8px; }
+.bars i { display: block; height: 10px; background: var(--river); }
+
+.entry { padding: 10px 0; border-top: 1px solid var(--rule); }
+.entry:first-child { border-top: none; }
+.entry .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.entry .zone { font: 600 20px/1.1 var(--display); }
+.entry p { margin: 4px 0 0; }
+.chip { font: 700 14px/1 var(--display); padding: 3px 8px; border-radius: 2px; color: var(--paper); letter-spacing: .02em; }
+.chip.watch, .chip.advisory, .chip.normal { color: var(--ink); }
+.actions { display: flex; gap: 8px; margin-top: 8px; }
+.countdown { font: 700 18px var(--display); color: var(--warning); }
+
+.tier-normal { background: var(--normal); } .tier-watch { background: var(--watch); }
+.tier-advisory { background: var(--advisory); } .tier-warning { background: var(--warning); }
+.tier-imminent { background: var(--imminent); }
+.tier-blind { background: repeating-linear-gradient(45deg, var(--blind) 0 6px, #8f84c2 6px 12px); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .leaflet-interactive.pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { fill-opacity: .45; } }
+}
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; height: auto; }
+  .mapwrap { height: 60vh; border-right: none; border-bottom: 1.5px solid var(--ink); }
+}
