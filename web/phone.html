@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SentinelMesh test phone</title>
+  <link rel="stylesheet" href="phone.css">
+</head>
+<body>
+  <div class="handset" aria-label="Simulated mobile phone">
+    <div class="status"><span id="clock"></span><span>Dialog 4G</span></div>
+
+    <section id="setup" class="screen">
+      <h1>Get flood and landslide warnings</h1>
+      <p>Choose where you live. Only the area (about 1 km) is stored, never your exact location.</p>
+      <label>Area <select id="zone"></select></label>
+      <label>Language
+        <select id="lang">
+          <option value="si">සිංහල</option>
+          <option value="ta">தமிழ்</option>
+          <option value="en">English</option>
+        </select>
+      </label>
+      <button id="join">Turn on warnings</button>
+      <p class="fine" id="setupmsg"></p>
+    </section>
+
+    <section id="home" class="screen" hidden>
+      <h1 id="homearea"></h1>
+      <p id="homestatus">Warnings are on. This phone checks for alerts every few seconds.</p>
+      <div id="history"></div>
+      <button class="link" id="reset">Use a different area</button>
+    </section>
+
+    <div id="alert" class="alert" role="alertdialog" aria-live="assertive" hidden>
+      <div class="alert-head" id="alerthead">Emergency alert</div>
+      <p class="alert-text" id="alerttext"></p>
+      <p class="alert-meta" id="alertmeta"></p>
+      <button id="dismiss">OK</button>
+    </div>
+  </div>
+  <script src="phone.js"></script>
+</body>
+</html>
