@@ -74,9 +74,12 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
         item = state_table.get_item(Key={"zone_id": zone_id}, ConsistentRead=True).get("Item")
         if item is None and only_if_known:
             return None
-        version = int(item["version"]) if item else 0
-        doc = json.loads(item["doc"]) if item else zonestate.empty_doc()
-        previous_tier = item["tier"] if item else "normal"
+        # The workflow's gate can create a record holding only alert_* fields (e.g. right after a
+        # reset), so every scorer field falls back to its default.
+        item = item or {}
+        version = int(item.get("version", 0))
+        doc = json.loads(item["doc"]) if item.get("doc") else zonestate.empty_doc()
+        previous_tier = item.get("tier", "normal")
 
         zonestate.merge(doc, observations, now)
         assessment, tier, went_up = zonestate.evaluate(zone, doc, previous_tier, now)
