@@ -1,0 +1,184 @@
+{
+  "Comment": "SentinelMesh escalation for cell ${cell}: de-duplicate, approve warnings (timeout issues anyway), issue, enqueue by tier, notify officers.",
+  "StartAt": "RankTier",
+  "States": {
+    "RankTier": {
+      "Type": "Choice",
+      "Choices": [
+        { "Variable": "$.tier", "StringEquals": "imminent", "Next": "RankImminent" },
+        { "Variable": "$.tier", "StringEquals": "warning", "Next": "RankWarning" }
+      ],
+      "Default": "RankAdvisory"
+    },
+    "RankImminent": { "Type": "Pass", "Result": "4", "ResultPath": "$.rank", "Next": "Gate" },
+    "RankWarning": { "Type": "Pass", "Result": "3", "ResultPath": "$.rank", "Next": "Gate" },
+    "RankAdvisory": { "Type": "Pass", "Result": "2", "ResultPath": "$.rank", "Next": "Gate" },
+    "Gate": {
+      "Comment": "One alert per zone per tier per episode, whether it came from the scorer or the IoT bypass.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${zone_state_table}",
+        "Key": { "zone_id": { "S.$": "$.zone_id" } },
+        "UpdateExpression": "SET alert_rank = :r, alert_tier = :t, alert_exec = :e",
+        "ConditionExpression": "attribute_not_exists(alert_rank) OR alert_rank < :r",
+        "ExpressionAttributeValues": {
+          ":r": { "N.$": "$.rank" },
+          ":t": { "S.$": "$.tier" },
+          ":e": { "S.$": "$$.Execution.Name" }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "ResultPath": null, "Next": "Deduplicated" }
+      ],
+      "Next": "RouteTier"
+    },
+    "Deduplicated": { "Type": "Succeed" },
+    "RouteTier": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.tier", "StringEquals": "warning" },
+            { "Variable": "$.approval_timeout_s", "IsPresent": true }
+          ],
+          "Next": "RequestApproval"
+        }
+      ],
+      "Default": "NoApproval"
+    },
+    "NoApproval": {
+      "Type": "Pass",
+      "Result": { "decision": "auto" },
+      "ResultPath": "$.approval",
+      "Next": "Issue"
+    },
+    "RequestApproval": {
+      "Comment": "Waits for a duty officer. A timeout or any failure here still issues the alert.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "${approvals_fn_arn}",
+        "Payload": {
+          "op": "approval_request",
+          "token.$": "$$.Task.Token",
+          "approval_id.$": "$$.Execution.Name",
+          "input.$": "$"
+        }
+      },
+      "TimeoutSecondsPath": "$.approval_timeout_s",
+      "ResultPath": "$.approval",
+      "Catch": [
+        { "ErrorEquals": ["States.Timeout"], "ResultPath": "$.approval_error", "Next": "MarkTimeout" },
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.approval_error", "Next": "MarkTimeout" }
+      ],
+      "Next": "Decision"
+    },
+    "MarkTimeout": {
+      "Type": "Pass",
+      "Parameters": { "decision": "timeout", "approval_id.$": "$$.Execution.Name" },
+      "ResultPath": "$.approval",
+      "Next": "Issue"
+    },
+    "Decision": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.approval.decision", "StringEquals": "reject", "Next": "RecordReject" }],
+      "Default": "Issue"
+    },
+    "RecordReject": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${issuer_fn_arn}",
+        "Payload": { "op": "record", "input.$": "$", "approval.$": "$.approval" }
+      },
+      "ResultPath": null,
+      "Next": "ReleaseGate"
+    },
+    "ReleaseGate": {
+      "Comment": "A rejected warning frees the gate so later evidence can raise it again.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${zone_state_table}",
+        "Key": { "zone_id": { "S.$": "$.zone_id" } },
+        "UpdateExpression": "REMOVE alert_rank, alert_tier, alert_exec"
+      },
+      "ResultPath": null,
+      "End": true
+    },
+    "Issue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${issuer_fn_arn}",
+        "Payload": { "op": "issue", "input.$": "$", "approval.$": "$.approval" }
+      },
+      "ResultSelector": {
+        "alert_id.$": "$.Payload.alert_id",
+        "queue_url.$": "$.Payload.queue_url",
+        "message.$": "$.Payload.message",
+        "summary.$": "$.Payload.summary"
+      },
+      "ResultPath": "$.issue",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 1,
+          "BackoffRate": 2,
+          "MaxAttempts": 4
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.issue_error", "Next": "IssueFailed" }],
+      "Next": "Enqueue"
+    },
+    "Enqueue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl.$": "$.issue.queue_url",
+        "MessageBody.$": "$.issue.message"
+      },
+      "ResultPath": null,
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "BackoffRate": 2, "MaxAttempts": 4 }],
+      "Next": "NotifyOfficers"
+    },
+    "NotifyOfficers": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${officers_topic_arn}",
+        "Subject": "SentinelMesh alert issued",
+        "Message.$": "$.issue.summary"
+      },
+      "ResultPath": null,
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": null, "Next": "Done" }],
+      "Next": "Done"
+    },
+    "IssueFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${officers_topic_arn}",
+        "Subject": "SentinelMesh: ALERT ISSUE FAILED - act manually",
+        "Message.$": "States.Format('Issuing {} for zone {} failed. Issue it manually now.', $.tier, $.zone_id)"
+      },
+      "ResultPath": null,
+      "Next": "ReleaseAfterFailure"
+    },
+    "ReleaseAfterFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${zone_state_table}",
+        "Key": { "zone_id": { "S.$": "$.zone_id" } },
+        "UpdateExpression": "REMOVE alert_rank, alert_tier, alert_exec"
+      },
+      "ResultPath": null,
+      "Next": "Failed"
+    },
+    "Failed": { "Type": "Fail", "Error": "IssueFailed" },
+    "Done": { "Type": "Succeed" }
+  }
+}
