@@ -72,6 +72,18 @@ python edge/field_gateway.py --thing sentinelmesh-gauge-Z07 --profile rising
 
 To show revocation, set `TF_VAR_revoked_devices` to `["sentinelmesh-gauge-Z07"]` and apply: the station is refused, buffers its readings, and the zone turns blind on the map.
 
+## Local Alert Node (warning a district with no cloud)
+
+Each district has a node identity (`terraform/app/edge.tf`). `edge/local_alert_node.py` runs on a laptop or small PC in the district office: it keeps the district's pre-staged bundle on disk, hears the cloud's alerts for its district over MQTT, takes field station readings over the LAN, and issues on its own when a reading crosses the danger level and the cloud is silent (after a 60 s grace) or unreachable (at once). It sends SMS through a LAN SMS gateway and serves the phone page with a local broadcast; its hash-chained decisions join the cloud decision chain when the connection returns.
+
+Demo ("cut the cloud"), all on one phone hotspot:
+
+1. Phone A runs an SMS gateway app with a local HTTP API; the laptop joins phone A's hotspot.
+2. `python edge/local_alert_node.py --thing sentinelmesh-node-kegalle --sms-url http://<phone A>:<port>/<send path>` (first run fetches the node's secret with your AWS credentials).
+3. `python edge/field_gateway.py --thing sentinelmesh-gauge-Z35 --profile surge --node http://<laptop>:8080`.
+4. Turn phone A's mobile data off: the LAN still works, the internet is gone. The node shows the cloud as unreachable and issues on the surge; SMS go out from phone A's SIM and phones on the hotspot opening `http://<laptop>:8080/phone.html` get the broadcast.
+5. Turn mobile data back on: the node uploads its decision records into the cloud chain.
+
 ## Teardown after the competition
 
 1. Run `stack=app`, `action=destroy`. The `verify-teardown` job must pass.
