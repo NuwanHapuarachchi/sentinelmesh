@@ -287,6 +287,22 @@ configure-secrets:
     - pip install -q boto3==1.40.40
     - python scripts/put_secrets.py
 
+# Loses cell a for real (consumers and IoT rules off), proves the gap, fails over to standby c and times the
+# recovery; always restores. GAMEDAY_SCOPE=cell moves the whole cell's zones, as a real loss would.
+gameday:
+  extends: .py
+  stage: verify
+  needs: []
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $STACK == "app" && $ACTION != "destroy"
+      when: manual
+      allow_failure: true
+  script:
+    - !reference [.aws_auth, script]
+    - pip install -q boto3==1.40.40
+    - python scripts/gameday.py --scope "${GAMEDAY_SCOPE:-zone}"
+
 # Read-only: walks the decision-record hash chain and fails if anything was changed, deleted or left out.
 verify-decisions:
   extends: .py
