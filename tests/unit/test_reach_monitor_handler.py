@@ -58,3 +58,10 @@ def test_test_alerts_unplanned_alerts_and_old_alerts_are_ignored(stack, reach):
     out = reach.handler({}, None)
     assert out == {"alerts": 0, "results": []}
     assert reach.metrics == []
+
+
+def test_undelivered_messages_count_against_the_rate(stack, reach):
+    put_alert(stack, "A1", audience=2, sent=2)
+    put_ledger(stack, "A1", [("sms", "DELIVERED"), ("sms", "UNDELIVERED")])
+    reach.handler({}, None)
+    assert values(reach, "DeliveryRatePct") == [(50.0, {"Tier": "imminent", "Channel": "sms"})]

@@ -72,7 +72,7 @@ def measure(item, now):
     result = {"alert_id": item["alert_id"], "tier": tier, "age_s": int(age), "channels": {}}
     for channel in sorted({c for c, _ in counts}):
         delivered = counts[(channel, "DELIVERED")]
-        sent = delivered + counts[(channel, "SENT")]
+        sent = delivered + counts[(channel, "SENT")] + counts[(channel, "UNDELIVERED")]
         metric("Undelivered", sent - delivered, Tier=tier, Channel=channel)
         rate = None
         if sent and age >= MIN_AGE_S:

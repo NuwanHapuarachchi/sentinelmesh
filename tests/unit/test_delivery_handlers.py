@@ -169,3 +169,15 @@ def test_an_all_clear_is_planned_onto_the_advisory_send_queue(stack, planner):
     subscribe(stack, 1)
     planner.handler(sqs_event(a), None)
     assert len(stack.messages("advisory", stack.send_queues)) == 1
+
+
+def test_a_failed_delivery_report_marks_the_ledger_undelivered(stack, sender):
+    public = stack.load("public_api.handler")
+    a = alert()
+    put_alert_meta(stack, a)
+    sender.handler(sqs_event({"alert": a, "recipients": [{"subscriber_id": "s1"}]}), None)
+    resp = public.handler(api_event("POST", "/sms/dlr", {"ref": "SM-1|s1", "status": "undeliv"},
+                                    headers={"X-DLR-Secret": "dlr-s3cret"}), None)
+    assert json.loads(resp["body"]) == {"status": "FAILED"}
+    row = stack.table("deliveries").get_item(Key={"alert_id": "SM-1", "subscriber_id": "s1"})["Item"]
+    assert row["status"] == "UNDELIVERED" and row["network_status"] == "FAILED"

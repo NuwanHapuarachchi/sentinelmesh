@@ -18,13 +18,11 @@ import os
 import re
 import time
 import uuid
-from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
-from botocore.exceptions import ClientError
 
-from common import sms
+from common import receipts, sms
 from common.api import respond
 from common.observe import log, metric
 
@@ -160,36 +158,8 @@ def ack(event, body):
 
 
 def receipt(subscriber_id, sk, channel):
-    now = time.time()
-    try:
-        item = inbox.update_item(
-            Key={"subscriber_id": subscriber_id, "sk": sk}, UpdateExpression="SET acked_at = :t",
-            ConditionExpression="attribute_exists(sk) AND attribute_not_exists(acked_at)",
-            ExpressionAttributeValues={":t": int(now * 1000)}, ReturnValues="ALL_NEW",
-        )["Attributes"]
-    except ClientError as exc:
-        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            return respond(200, {"duplicate": True})
-        raise
-    ttfa_ms = now * 1000 - int(item["trigger_rx_ms"])
-    try:
-        deliveries.update_item(
-            Key={"alert_id": item["alert_id"], "subscriber_id": subscriber_id},
-            UpdateExpression="SET #s = :d, delivered_at = :t", ConditionExpression="attribute_exists(subscriber_id)",
-            ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":d": "DELIVERED", ":t": int(now)},
-        )
-    except ClientError as exc:  # no ledger row (sent before the ledger existed): the inbox receipt still counts
-        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
-            raise
-    first = alerts.update_item(
-        Key={"alert_id": item["alert_id"], "sk": "META"},
-        UpdateExpression="ADD delivered :one SET first_receipt_ms = if_not_exists(first_receipt_ms, :ms)",
-        ExpressionAttributeValues={":one": 1, ":ms": Decimal(int(ttfa_ms))}, ReturnValues="ALL_NEW",
-    )["Attributes"]
-    metric("DeliveryReceipts", 1, Channel=channel, Tier=item["tier"])
-    if int(first.get("delivered", 0)) == 1:  # first confirmed delivery for this alert
-        metric("TimeToFirstAlertMs", ttfa_ms, "Milliseconds", Tier=item["tier"])
-    return respond(200, {"acknowledged": True, "ttfa_ms": int(ttfa_ms)})
+    out = receipts.record(inbox, deliveries, alerts, subscriber_id, sk, channel)
+    return respond(200, out)
 
 
 def dlr(event, body):
@@ -201,9 +171,10 @@ def dlr(event, body):
     ref, status = sms.parse_dlr(params)
     if not ref or "|" not in ref:
         return respond(400, {"error": "missing ref"})
-    alert_id, subscriber_id = ref.split("|", 1)
     metric("SmsDeliveryReports", 1, Status=status)
+    if status == "FAILED":
+        receipts.undelivered(deliveries, ref, status)
     if status != "DELIVERED":
         return respond(200, {"status": status})
-    sent = deliveries.get_item(Key={"alert_id": alert_id, "subscriber_id": subscriber_id}).get("Item") or {}
-    return receipt(subscriber_id, sent["inbox_sk"], "sms") if sent.get("inbox_sk") else respond(200, {"status": status})
+    out = receipts.record_for_ref(inbox, deliveries, alerts, ref, "sms")
+    return respond(200, out if "acknowledged" in out or "duplicate" in out else {"status": status})
