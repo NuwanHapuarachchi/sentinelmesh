@@ -78,3 +78,16 @@ def test_a_refused_certificate_buffers_like_an_outage(tmp_path):
 
     s = station(tmp_path, [Refused()], [])
     assert s.send({"seq": 0}) == "buffered"
+
+
+def test_credentials_are_fetched_once_then_work_offline(stack, tmp_path, monkeypatch):
+    monkeypatch.setattr(fg, "STATE", tmp_path)
+    secret = {"certificate_pem": "CERT", "private_key_pem": "KEY", "endpoint": "e", "zone": "Z07", "class": "gauge",
+              "warning_level_m": 3.0, "danger_level_m": 4.5}
+    stack.secrets.create_secret(Name="sentinelmesh/devices/sentinelmesh-gauge-Z07", SecretString=json.dumps(secret))
+    args = fg.argparse.Namespace(cert=None, thing="sentinelmesh-gauge-Z07", region="ap-southeast-2")
+    first = fg.credentials(args)
+    stack.secrets.delete_secret(SecretId="sentinelmesh/devices/sentinelmesh-gauge-Z07", ForceDeleteWithoutRecovery=True)
+    second = fg.credentials(args)  # the cloud copy is gone: the cached one is used
+    assert first == second and second["zone"] == "Z07"
+    assert (tmp_path / "sentinelmesh-gauge-Z07" / "key.pem").read_text() == "KEY"

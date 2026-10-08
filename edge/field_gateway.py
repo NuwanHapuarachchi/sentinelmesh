@@ -10,8 +10,9 @@ While the cloud is unreachable, readings are buffered to a local file and replay
     python edge/field_gateway.py --thing sentinelmesh-gauge-Z07 --profile surge --node http://192.168.43.10:8080
 
 Credentials: the station's secret in Secrets Manager (sentinelmesh/devices/<thing>, written by Terraform:
-certificate, private key, IoT endpoint, zone, class and thresholds), or --cert/--key/--endpoint/--zone files
-and flags. Python 3.11+, standard library only (plus boto3 when reading the secret).
+certificate, private key, IoT endpoint, zone, class and thresholds), fetched once with your AWS credentials and
+kept in edge/state/<thing>/ (git-ignored) so the station can start offline; or --cert/--key/--endpoint/--zone
+files and flags. Python 3.11+, standard library only (plus boto3 for the first fetch).
 """
 
 import argparse
@@ -107,12 +108,18 @@ def credentials(args):
     if args.cert:
         return {"certificate_file": args.cert, "key_file": args.key, "endpoint": args.endpoint, "zone": args.zone,
                 "class": args.cls, "warning_level_m": args.warning, "danger_level_m": args.danger}
-    import boto3  # only needed for the secret
-
-    secret = json.loads(boto3.client("secretsmanager", region_name=args.region)
-                        .get_secret_value(SecretId=f"sentinelmesh/devices/{args.thing}")["SecretString"])
     folder = STATE / args.thing
-    folder.mkdir(parents=True, exist_ok=True)
+    cached = folder / "secret.json"
+    if cached.exists():  # fetched before: the station can start with no cloud
+        secret = json.loads(cached.read_text(encoding="utf-8"))
+    else:
+        import boto3  # only needed for the first fetch
+
+        secret = json.loads(boto3.client("secretsmanager", region_name=args.region)
+                            .get_secret_value(SecretId=f"sentinelmesh/devices/{args.thing}")["SecretString"])
+        folder.mkdir(parents=True, exist_ok=True)
+        cached.write_text(json.dumps(secret), encoding="utf-8")
+        os.chmod(cached, 0o600)
     (folder / "cert.pem").write_text(secret["certificate_pem"])
     (folder / "key.pem").write_text(secret["private_key_pem"])
     os.chmod(folder / "key.pem", 0o600)
