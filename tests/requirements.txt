@@ -1,3 +1,4 @@
 pytest==8.4.2
 pytest-cov==7.0.0
 boto3==1.40.40
+moto[dynamodb,s3,sqs,sns,secretsmanager]==5.2.3

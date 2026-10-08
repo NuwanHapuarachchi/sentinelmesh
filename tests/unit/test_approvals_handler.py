@@ -1,0 +1,84 @@
+import json
+
+import pytest
+from botocore.exceptions import ClientError
+from conftest import api_event
+
+
+class FakeSfn:
+    """Records task callbacks; optionally fails like an expired token."""
+
+    def __init__(self, error=None):
+        self.calls, self.error = [], error
+
+    def send_task_success(self, taskToken, output):
+        if self.error:
+            raise ClientError({"Error": {"Code": self.error, "Message": "x"}}, "SendTaskSuccess")
+        self.calls.append((taskToken, json.loads(output)))
+
+
+@pytest.fixture
+def approvals(stack):
+    mod = stack.load("approvals.handler")
+    mod.sfn = FakeSfn()
+    return mod
+
+
+def request(mod, approval_id="Z07-warning-e1-100", zone="Z07", is_test=False):
+    return mod.handler({
+        "op": "approval_request", "token": "tok-" + approval_id, "approval_id": approval_id,
+        "input": {"zone_id": zone, "tier": "warning", "hazard": "flood", "approval_timeout_s": 300, "score": 0.6,
+                  "agreeing": ["gauge", "forecast"], "is_test": is_test, "cell": "a"},
+    }, None)
+
+
+def decide(mod, approval_id, decision, note="", groups="duty_officer"):
+    event = api_event("POST", "/approvals/{id}", {"decision": decision, "note": note}, groups=groups, path={"id": approval_id})
+    resp = mod.handler(event, None)
+    return resp["statusCode"], json.loads(resp["body"])
+
+
+def test_request_stores_pending_approval_and_hides_token(stack, approvals):
+    request(approvals)
+    resp = approvals.handler(api_event("GET", "/approvals", groups="duty_officer"), None)
+    items = json.loads(resp["body"])["approvals"]
+    assert [i["approval_id"] for i in items] == ["Z07-warning-e1-100"]
+    assert "task_token" not in items[0]
+    assert 0 < items[0]["seconds_left"] <= 300
+
+
+def test_viewer_cannot_list_or_decide(stack, approvals):
+    assert approvals.handler(api_event("GET", "/approvals", groups="viewer"), None)["statusCode"] == 403
+    assert decide(approvals, "x", "approve", groups="viewer")[0] == 403
+
+
+def test_approve_resumes_workflow_with_officer_identity(stack, approvals):
+    request(approvals)
+    status, body = decide(approvals, "Z07-warning-e1-100", "approve", note="looks right")
+    assert status == 200 and body["decision"] == "approve"
+    token, output = approvals.sfn.calls[0]
+    assert token == "tok-Z07-warning-e1-100"
+    assert output["decided_by"] == "officer@test" and output["decision"] == "approve"
+    item = stack.table("approvals").get_item(Key={"approval_id": "Z07-warning-e1-100"})["Item"]
+    assert item["status"] == "APPROVED" and "pending" not in item
+
+
+def test_reject_needs_a_note(stack, approvals):
+    request(approvals)
+    assert decide(approvals, "Z07-warning-e1-100", "reject")[0] == 400
+
+
+def test_second_decision_is_refused(stack, approvals):
+    request(approvals)
+    assert decide(approvals, "Z07-warning-e1-100", "approve")[0] == 200
+    assert decide(approvals, "Z07-warning-e1-100", "reject", note="late")[0] == 409
+    assert len(approvals.sfn.calls) == 1
+
+
+def test_expired_token_marks_auto_issued(stack, approvals):
+    request(approvals)
+    approvals.sfn = FakeSfn(error="TaskTimedOut")
+    status, _ = decide(approvals, "Z07-warning-e1-100", "approve")
+    assert status == 409
+    item = stack.table("approvals").get_item(Key={"approval_id": "Z07-warning-e1-100"})["Item"]
+    assert item["status"] == "AUTO_ISSUED"
