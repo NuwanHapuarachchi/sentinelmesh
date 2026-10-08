@@ -39,6 +39,7 @@ variable "delivery" {
     subscribers        = object({ name = string, arn = string })
     inbox              = object({ name = string, arn = string })
     deliveries         = object({ name = string, arn = string })
+    meta               = object({ name = string, arn = string })
     web_bucket         = object({ name = string, arn = string })
     decisions_bucket   = object({ name = string, arn = string })
     approvals_fn_arn   = string

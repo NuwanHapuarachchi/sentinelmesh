@@ -9,9 +9,10 @@ op=record -> decision record only, for a warning or all-clear that was not issue
              mode=superseded  (a higher tier was issued, or the zone fell below advisory / rose again, while it waited)
              mode=unconfirmed (nobody confirmed an all-clear in time, so the earlier alert stays in force)
 
-Decision records are write-once: the bucket policy rejects any PutObject without If-None-Match.
+Decision records are write-once (the bucket policy rejects any PutObject without If-None-Match) and each is
+linked into a hash chain (common/chain.py), so an edited or deleted record shows up in verification.
 Environment: ALERTS_TABLE, APPROVALS_TABLE, ZONES_TABLE, STATE_TABLE, WEB_BUCKET, DECISIONS_BUCKET, CELL,
-QUEUE_IMMINENT, QUEUE_WARNING, QUEUE_ADVISORY, RULES_VERSION, PUBLIC_FEED_FUNCTION (optional).
+QUEUE_IMMINENT, QUEUE_WARNING, QUEUE_ADVISORY, RULES_VERSION, META_TABLE (chain head), PUBLIC_FEED_FUNCTION (optional).
 """
 
 import hashlib
@@ -25,7 +26,7 @@ from decimal import Decimal
 import boto3
 from botocore.exceptions import ClientError
 
-from common import cap, messages
+from common import cap, chain, messages
 from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
@@ -35,6 +36,7 @@ alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 approvals = ddb.Table(os.environ["APPROVALS_TABLE"])
 zones = ddb.Table(os.environ["ZONES_TABLE"])
 states = ddb.Table(os.environ["STATE_TABLE"])
+meta = ddb.Table(os.environ["META_TABLE"]) if os.environ.get("META_TABLE") else None
 QUEUES = {t: os.environ[f"QUEUE_{t.upper()}"] for t in ("imminent", "warning", "advisory")}
 QUEUES["clear"] = QUEUES["advisory"]  # an all-clear is not urgent
 # Approval states the workflow may still move an approval out of (an officer may be mid-decision).
@@ -181,13 +183,17 @@ def record_decision(inp, mode, approval=None, alert_id=None, cap_sha=None, execu
         "approved_by": (approval or {}).get("decided_by"), "approval_note": (approval or {}).get("note"),
         "cap_sha256": cap_sha, "rules_version": os.environ.get("RULES_VERSION", "dev"),
     }
+    raw = json.dumps(body, default=str, ensure_ascii=False).encode("utf-8")
     try:
-        s3.put_object(Bucket=os.environ["DECISIONS_BUCKET"], Key=key, IfNoneMatch="*",
-                      Body=json.dumps(body, default=str, ensure_ascii=False).encode("utf-8"),
+        s3.put_object(Bucket=os.environ["DECISIONS_BUCKET"], Key=key, IfNoneMatch="*", Body=raw,
                       ContentType="application/json", ChecksumAlgorithm="SHA256")
     except ClientError as exc:
-        # 412: a previous attempt already wrote this record; 409: a concurrent attempt is writing it.
+        # 412: a previous attempt already wrote (and chained) this record; 409: a concurrent attempt is writing it.
         if exc.response["Error"]["Code"] not in ("PreconditionFailed", "ConditionalRequestConflict"):
             raise
         log("decision_exists", key=key)
-    return {"decision_key": key}
+        return {"decision_key": key}
+    out = {"decision_key": key}
+    if meta is not None:
+        out["chain"] = chain.append(s3, os.environ["DECISIONS_BUCKET"], meta, key, raw, at=at)
+    return out

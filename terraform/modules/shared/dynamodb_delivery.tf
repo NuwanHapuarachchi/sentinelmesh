@@ -132,6 +132,23 @@ resource "aws_dynamodb_table" "deliveries" {
   }
 }
 
+# Small shared settings, keyed by "k". Holds the decision chain's head hint (common/chain.py).
+resource "aws_dynamodb_table" "meta" {
+  name                        = "${var.prefix}-meta"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "k"
+  deletion_protection_enabled = false
+
+  attribute {
+    name = "k"
+    type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+}
+
 # Simulated handset inbox (stands in for SMS / cell broadcast in the demo).
 resource "aws_dynamodb_table" "inbox" {
   name                        = "${var.prefix}-inbox"

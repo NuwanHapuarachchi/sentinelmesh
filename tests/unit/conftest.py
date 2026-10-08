@@ -30,6 +30,7 @@ TABLES = {
     "inbox": ("subscriber_id", "sk", {}),
     "ratelimits": ("k", None, {}),
     "deliveries": ("alert_id", "subscriber_id", {}),
+    "meta": ("k", None, {}),
     "a-observations": ("zone_id", "sk", {}),
 }
 NUMERIC = {"issued_at", "created_at"}
@@ -95,9 +96,11 @@ class Stack:
         env = {
             "ZONES_TABLE": "t-zones", "STATE_TABLE": "t-zone-state", "ALERTS_TABLE": "t-alerts",
             "APPROVALS_TABLE": "t-approvals", "SUBSCRIBERS_TABLE": "t-subscribers", "INBOX_TABLE": "t-inbox",
-            "RATELIMITS_TABLE": "t-ratelimits", "DELIVERIES_TABLE": "t-deliveries", "CELL": "a", "RULES_VERSION": "test-sha",
+            "RATELIMITS_TABLE": "t-ratelimits", "DELIVERIES_TABLE": "t-deliveries", "META_TABLE": "t-meta",
+            "CELL": "a", "RULES_VERSION": "test-sha",
             "OFFICERS_TOPIC_ARN": self.topic_arn, "SMS_SECRET_ARN": self.secret_arn, "SMS_PROVIDER": "simulator",
-            "IOT_ENDPOINT": f"data-ats.iot.{REGION}.amazonaws.com", "REPORT_PEPPER_SECRET_ARN": self.pepper_arn, "STATE_MACHINE_ARN": "",
+            "IOT_ENDPOINT": f"data-ats.iot.{REGION}.amazonaws.com", "REPORT_PEPPER_SECRET_ARN": self.pepper_arn,
+            "STATE_MACHINE_ARN": "",
             "SCENARIO_FUNCTION": "t-scenario",
             **BUCKETS,
             **{f"QUEUE_{t.upper()}": url for t, url in self.queues.items()},
@@ -125,6 +128,10 @@ class Stack:
 
     def keys(self, bucket, prefix=""):
         return [o["Key"] for o in self.s3.list_objects_v2(Bucket=BUCKETS[bucket], Prefix=prefix).get("Contents", [])]
+
+    def decision_records(self):
+        """Decision records only (not their hash-chain entries)."""
+        return [k for k in self.keys("DECISIONS_BUCKET", "decisions/") if not k.startswith("decisions/chain/")]
 
     def body(self, bucket, key):
         return self.s3.get_object(Bucket=BUCKETS[bucket], Key=key)["Body"].read().decode("utf-8")

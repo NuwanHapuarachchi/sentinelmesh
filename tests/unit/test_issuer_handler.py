@@ -48,7 +48,7 @@ def test_issue_writes_cap_alert_decision_and_queue_message(stack, issuer):
     message = json.loads(out["message"])
     assert set(message["texts"]) == {"en", "si", "ta"} and message["tier"] == "imminent"
     assert stack.keys("WEB_BUCKET", "cap/") == [alert_item(stack, out["alert_id"])["cap_key"]]
-    [key] = stack.keys("DECISIONS_BUCKET", "decisions/")
+    [key] = stack.decision_records()
     decision = json.loads(stack.body("DECISIONS_BUCKET", key))
     assert decision["alert_id"] == out["alert_id"] and decision["mode"] == "auto"
     assert decision["rules_version"] == "test-sha"
@@ -75,7 +75,7 @@ def test_superseded_warning_is_recorded_and_settles_the_approval(stack, issuer, 
     record(issuer, "superseded")
     item = stack.table("approvals").get_item(Key={"approval_id": "X1"})["Item"]
     assert item["status"] == "SUPERSEDED" and "pending" not in item
-    [key] = stack.keys("DECISIONS_BUCKET", "decisions/")
+    [key] = stack.decision_records()
     decision = json.loads(stack.body("DECISIONS_BUCKET", key))
     assert decision["mode"] == "superseded" and decision["alert_id"] is None
     assert stack.table("alerts").scan()["Items"] == []
@@ -92,7 +92,7 @@ def test_rejected_record_leaves_the_approval_alone(stack, issuer):
     stack.table("approvals").put_item(Item={"approval_id": "X1", "status": "REJECTED", "created_at": 1})
     record(issuer, "rejected")
     assert stack.table("approvals").get_item(Key={"approval_id": "X1"})["Item"]["status"] == "REJECTED"
-    [key] = stack.keys("DECISIONS_BUCKET", "decisions/")
+    [key] = stack.decision_records()
     assert json.loads(stack.body("DECISIONS_BUCKET", key))["mode"] == "rejected"
 
 
@@ -109,7 +109,7 @@ def test_issue_retries_produce_one_alert_one_cap_and_one_decision(stack, issuer)
     assert first == second
     assert len(stack.table("alerts").scan()["Items"]) == 1
     assert len(stack.keys("WEB_BUCKET", "cap/")) == 1
-    assert len(stack.keys("DECISIONS_BUCKET", "decisions/")) == 1
+    assert len(stack.decision_records()) == 1
     assert first["alert_id"].startswith("SM-20261008-Z07-")
     assert alert_item(stack, first["alert_id"])["issued_at"] == int(datetime(2026, 10, 8, 6, 30, tzinfo=UTC).timestamp())
 
@@ -128,7 +128,7 @@ def test_record_retries_write_one_decision(stack, issuer):
              "entered": "2026-10-08T06:31:00Z", "approval": {"decision": "timeout", "approval_id": "X1"}}
     issuer.handler(event, None)
     issuer.handler(event, None)
-    assert stack.keys("DECISIONS_BUCKET", "decisions/") == ["decisions/2026/10/08/Z07/Z07-warning-e1-1-superseded.json"]
+    assert stack.decision_records() == ["decisions/2026/10/08/Z07/Z07-warning-e1-1-superseded.json"]
 
 
 def test_an_alert_becomes_the_zones_last_alert(stack, issuer):
@@ -157,7 +157,7 @@ def test_unconfirmed_all_clear_expires_its_approval(stack, issuer):
     issuer.handler({"op": "record", "mode": "unconfirmed", "input": inp, "execution": "Z07-clear-e1-1",
                     "approval": {"decision": "timeout", "approval_id": "C1"}}, None)
     assert stack.table("approvals").get_item(Key={"approval_id": "C1"})["Item"]["status"] == "EXPIRED"
-    [key] = stack.keys("DECISIONS_BUCKET", "decisions/")
+    [key] = stack.decision_records()
     assert json.loads(stack.body("DECISIONS_BUCKET", key))["mode"] == "unconfirmed"
 
 

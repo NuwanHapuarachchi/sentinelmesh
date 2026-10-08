@@ -8,6 +8,7 @@ locals {
     inbox       = aws_dynamodb_table.inbox
     ratelimits  = aws_dynamodb_table.ratelimits
     deliveries  = aws_dynamodb_table.deliveries
+    meta        = aws_dynamodb_table.meta
   }
 }
 

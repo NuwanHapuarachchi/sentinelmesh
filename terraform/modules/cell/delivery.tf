@@ -61,6 +61,7 @@ module "issuer" {
     QUEUE_ADVISORY       = aws_sqs_queue.tier["advisory"].url
     RULES_VERSION        = var.rules_version
     PUBLIC_FEED_FUNCTION = var.public_feed.name
+    META_TABLE           = var.delivery.meta.name
   }
 
   policy_statements = [
@@ -69,6 +70,8 @@ module "issuer" {
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = [var.delivery.approvals.arn, var.state_table.arn] },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.web_bucket.arn}/cap/*" },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.decisions_bucket.arn}/decisions/*" },
+    { Effect = "Allow", Action = "s3:GetObject", Resource = "${var.delivery.decisions_bucket.arn}/decisions/chain/*" },
+    { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = var.delivery.meta.arn },
     { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = var.public_feed.arn },
   ]
 }
