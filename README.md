@@ -62,6 +62,10 @@ Optional variables: `TF_VAR_officer_email` (alarm and budget emails), `TF_VAR_of
 
 The gateway's credentials never go through Terraform: add `SMS_PROVIDER_API_KEY` (and optionally `SMS_SENDER_ID`, `SMS_DLR_SECRET`) as masked, protected variables and run the manual **configure-secrets** job on `main`, which writes them into Secrets Manager. If `SMS_DLR_SECRET` is not set, one is generated; read it in Secrets Manager (`sentinelmesh/sms-provider`) to configure the gateway's delivery reports.
 
+## Real SMS with AWS End User Messaging
+
+Set `TF_VAR_sms_provider` to `eum` and apply: senders send through AWS End User Messaging SMS (the successor of Pinpoint's SMS APIs), and a configuration set publishes delivery events through SNS to `sms_events`, which records receipts and failures in the delivery ledger. New accounts are in the SMS sandbox, so first add and verify the team's phones as destination numbers in the AWS End User Messaging SMS console (one-time, not Terraform). Optionally set `TF_VAR_eum_origination_identity` to a registered sender ID or number. Only subscribers with a verified phone number get real SMS; everyone else keeps the simulated inbox and the broadcast.
+
 ## Field devices
 
 Stations `sentinelmesh-gauge-Z07`, `-Z35` and `-T01` are IoT things with their own certificates (`terraform/app/iot.tf`). Each may connect only as itself and publish only to `sm/dev/{its zone}/{its class}`; the routing rules take the class and source from the topic and certificate, not the payload. Run one with your AWS credentials (it reads its certificate from Secrets Manager):

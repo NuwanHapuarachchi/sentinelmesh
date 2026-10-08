@@ -22,6 +22,23 @@ variable "officer_email" {
   default     = ""
 }
 
+variable "sms_provider" {
+  description = "How real SMS go out: simulator, http (third-party gateway at sms_provider_url) or eum (AWS End User Messaging SMS). Empty = http if sms_provider_url is set, else simulator."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "simulator", "http", "eum"], var.sms_provider)
+    error_message = "sms_provider must be simulator, http or eum."
+  }
+}
+
+variable "eum_origination_identity" {
+  description = "For eum: sender ID, phone number or pool (name or ARN) to send from. Empty = the account default (in the SMS sandbox, only verified destination numbers receive messages)."
+  type        = string
+  default     = ""
+}
+
 variable "sms_provider_url" {
   description = "Third-party SMS gateway send URL. Empty = simulator. Set via TF_VAR_sms_provider_url."
   type        = string

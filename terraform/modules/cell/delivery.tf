@@ -150,6 +150,7 @@ module "sender" {
     { Effect = "Allow", Action = "dynamodb:PutItem", Resource = var.delivery.inbox.arn },
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = var.delivery.alerts.arn },
     { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = var.delivery.sms_secret_arn },
+    { Effect = "Allow", Action = "sms-voice:SendTextMessage", Resource = "*" }, # used when SMS_PROVIDER=eum
     {
       Effect   = "Allow"
       Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]

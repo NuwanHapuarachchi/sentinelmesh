@@ -7,8 +7,8 @@ twice. Sends run on a few threads (HTTP gateways are slow). A transient failure 
 FAILED and fails the message, so SQS retries just those recipients (up to the queue's maxReceiveCount,
 then the dead-letter queue and its alarm); a gateway rejection (4xx) is permanent.
 
-Environment: DELIVERIES_TABLE, INBOX_TABLE, ALERTS_TABLE, CELL, SMS_PROVIDER, SMS_SECRET_ARN, plus SMS_HTTP_*
-(see common/sms.py).
+Environment: DELIVERIES_TABLE, INBOX_TABLE, ALERTS_TABLE, CELL, SMS_PROVIDER (simulator, http or eum),
+SMS_SECRET_ARN and SMS_HTTP_* for http, EUM_ORIGINATION_IDENTITY and EUM_CONFIGURATION_SET for eum (see common/sms.py).
 """
 
 import json
@@ -24,11 +24,13 @@ from common import sms
 from common.observe import log, metric
 
 PROVIDER = os.environ.get("SMS_PROVIDER", "simulator")
+REAL_SMS = PROVIDER in ("http", "eum")
 THREADS = 8
 STALE_S = 180  # a claim older than this (longer than the function timeout) belongs to a dead invocation
 KEEP_S = 30 * 86400
 INBOX_KEEP_S = 2 * 86400
 secrets = boto3.client("secretsmanager")
+eum = boto3.client("pinpoint-sms-voice-v2") if PROVIDER == "eum" else None  # clients are thread-safe
 _local = threading.local()
 _secret_cache = {}
 # Module-level, so its threads (and their per-thread DynamoDB resources) are reused by warm invocations.
@@ -71,7 +73,7 @@ def deliver_batch(message):
 
 def deliver_one(alert, sub):
     t, now = tables(), time.time()
-    channel = "sms" if PROVIDER == "http" and sub.get("msisdn") else "sim"
+    channel = "sms" if REAL_SMS and sub.get("msisdn") else "sim"
     key = {"alert_id": alert["alert_id"], "subscriber_id": sub["subscriber_id"]}
     try:  # claim: first time, a transient failure being retried, or a claim abandoned by a dead invocation
         t.deliveries.put_item(
@@ -87,8 +89,12 @@ def deliver_one(alert, sub):
         raise
 
     text = alert["texts"].get(sub.get("lang", "en"), alert["texts"]["en"])
-    if channel == "sms":
-        result = sms.send_http(sub["msisdn"], text, f"{alert['alert_id']}|{sub['subscriber_id']}", load_secret())
+    ref = f"{alert['alert_id']}|{sub['subscriber_id']}"
+    if channel == "sms" and PROVIDER == "eum":
+        result = sms.send_eum(sub["msisdn"], text, ref, eum, os.environ.get("EUM_ORIGINATION_IDENTITY"),
+                              os.environ.get("EUM_CONFIGURATION_SET"))
+    elif channel == "sms":
+        result = sms.send_http(sub["msisdn"], text, ref, load_secret())
     else:
         result = {"status": "SENT"}
     status = result["status"]
