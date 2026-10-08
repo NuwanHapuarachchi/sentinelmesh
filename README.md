@@ -50,7 +50,9 @@ Pushes to `main` run lint, unit tests, the IaC scan and an app plan. Other branc
 
 Bootstrap does not need the app stack to exist, so this order works on a fresh account. The deploy role can create the workload permissions boundary (`terraform/app/iam.tf`) but is denied new versions of it, so it can never widen its own limits. To change the boundary, run the app stack once as an admin (temporarily add the `BOOTSTRAP_*` key and remove `SM_AWS_DEPLOY_ROLE_ARN`).
 
-Optional variables: `TF_VAR_officer_email` (alerts and Cognito invite), `SMS_PROVIDER_URL` and `SMS_PROVIDER_API_KEY` (third-party SMS, later).
+Optional variables: `TF_VAR_officer_email` (alarm and budget emails), `TF_VAR_officers` (console logins), and for a real third-party SMS gateway `TF_VAR_sms_provider_url` (plus `TF_VAR_sms_http_options`, see `services/common/sms.py`).
+
+The gateway's credentials never go through Terraform: add `SMS_PROVIDER_API_KEY` (and optionally `SMS_SENDER_ID`, `SMS_DLR_SECRET`) as masked, protected variables and run the manual **configure-secrets** job on `main`, which writes them into Secrets Manager. If `SMS_DLR_SECRET` is not set, one is generated; read it in Secrets Manager (`sentinelmesh/sms-provider`) to configure the gateway's delivery reports.
 
 ## Teardown after the competition
 
