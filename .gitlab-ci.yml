@@ -19,6 +19,7 @@ spec:
 ---
 include:
   - template: Jobs/SAST-IaC.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
 
 workflow:
   rules:
@@ -162,8 +163,13 @@ web-tests:
     - for f in web/*.js; do node --check "$f"; done
     - node --test tests/web/*.test.mjs
 
-# The IaC security scan only needs to run when code changes, not on apply/destroy runs.
+# The IaC security scan and the committed-secrets scan only need to run when code changes, not on
+# apply/destroy runs.
 kics-iac-sast:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
+
+secret_detection:
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
 
