@@ -19,7 +19,7 @@ Everything is Terraform and everything runs in GitLab CI/CD. Nobody provisions f
 
 ## Account rules
 
-- Region `ap-southeast-2` only (organization policy).
+- Region `ap-southeast-2` only (organization policy). Kinesis is blocked, so the observation bus is a DynamoDB table and stream.
 - No retention anywhere: no Object Lock, no customer-managed KMS keys, no PITR, secrets deleted immediately. `terraform destroy` removes everything.
 
 ## Running the pipeline
@@ -47,6 +47,8 @@ Pushes to `main` run lint, unit tests, the IaC scan and an app plan. Other branc
 2. Create a GitLab personal access token with `api` scope. Add it as `GITLAB_TOKEN` (masked, hidden, protected).
 3. Run the pipeline with `stack=bootstrap`, `action=apply`. Terraform creates the CI user and deploy role and writes `SM_AWS_ACCESS_KEY_ID`, `SM_AWS_SECRET_ACCESS_KEY` and `SM_AWS_DEPLOY_ROLE_ARN` into the project variables.
 4. Delete the temporary admin key and the `BOOTSTRAP_*` variables.
+
+Bootstrap does not need the app stack to exist, so this order works on a fresh account. The deploy role can create the workload permissions boundary (`terraform/app/iam.tf`) but is denied new versions of it, so it can never widen its own limits. To change the boundary, run the app stack once as an admin (temporarily add the `BOOTSTRAP_*` key and remove `SM_AWS_DEPLOY_ROLE_ARN`).
 
 Optional variables: `TF_VAR_officer_email` (alerts and Cognito invite), `SMS_PROVIDER_URL` and `SMS_PROVIDER_API_KEY` (third-party SMS, later).
 

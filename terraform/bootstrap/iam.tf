@@ -3,6 +3,10 @@ locals {
   workload_path   = "/${var.prefix}/"
   workload_roles  = "${local.iam_arn}:role${local.workload_path}*"
   workload_policy = "${local.iam_arn}:policy${local.workload_path}*"
+
+  # The workload boundary is created by the app stack (terraform/app/iam.tf). Its ARN is fixed by name, so
+  # this stack does not look it up and can run first on a fresh account.
+  boundary_arn = "${local.iam_arn}:policy${local.workload_path}${var.prefix}-workload-boundary"
 }
 
 # The pipeline's identity. Its only permission is to assume the deploy role.
@@ -26,12 +30,6 @@ resource "aws_iam_user_policy" "ci_assume_deploy" {
       Resource = aws_iam_role.deploy.arn
     }]
   })
-}
-
-# The workload boundary is created by the app stack (terraform/app/iam.tf); the deploy role may only
-# create roles that carry it.
-data "aws_iam_policy" "workload_boundary" {
-  arn = "${local.iam_arn}:policy${local.workload_path}${var.prefix}-workload-boundary"
 }
 
 # The role every app-stack job assumes. Trust is limited to the CI user; sessions last at most 1 hour.
@@ -73,7 +71,7 @@ resource "aws_iam_role_policy" "deploy_scoped_iam" {
           "iam:DeleteRolePolicy",
         ]
         Resource  = local.workload_roles
-        Condition = { StringEquals = { "iam:PermissionsBoundary" = data.aws_iam_policy.workload_boundary.arn } }
+        Condition = { StringEquals = { "iam:PermissionsBoundary" = local.boundary_arn } }
       },
       {
         Sid    = "ManageWorkloadRoles"
@@ -117,6 +115,21 @@ resource "aws_iam_role_policy" "deploy_scoped_iam" {
         Effect   = "Allow"
         Action   = ["iam:GetPolicy", "iam:GetPolicyVersion"]
         Resource = "arn:aws:iam::aws:policy/*"
+      },
+      {
+        # The deploy role may create the boundary (first app apply) and delete it (teardown) but never change
+        # it: a new version allowing iam:* would let it escalate through any role it creates. Changing the
+        # boundary needs an admin.
+        Sid      = "BoundaryIsFixedForTheDeployRole"
+        Effect   = "Deny"
+        Action   = ["iam:CreatePolicyVersion", "iam:SetDefaultPolicyVersion"]
+        Resource = local.boundary_arn
+      },
+      {
+        Sid      = "KeepTheBoundaryOnWorkloadRoles"
+        Effect   = "Deny"
+        Action   = "iam:DeleteRolePermissionsBoundary"
+        Resource = local.workload_roles
       },
     ]
   })
