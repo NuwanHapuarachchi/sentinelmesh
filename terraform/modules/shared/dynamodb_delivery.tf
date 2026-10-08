@@ -102,6 +102,36 @@ resource "aws_dynamodb_table" "subscribers" {
   }
 }
 
+# Delivery ledger: one item per alert and recipient. Senders claim a recipient here with a conditional
+# write before sending, so retries never text anyone twice; receipts mark it DELIVERED, so the delivery
+# rate of an alert is one query.
+resource "aws_dynamodb_table" "deliveries" {
+  name                        = "${var.prefix}-deliveries"
+  billing_mode                = "PAY_PER_REQUEST"
+  hash_key                    = "alert_id"
+  range_key                   = "subscriber_id"
+  deletion_protection_enabled = false
+
+  attribute {
+    name = "alert_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "subscriber_id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = false
+  }
+}
+
 # Simulated handset inbox (stands in for SMS / cell broadcast in the demo).
 resource "aws_dynamodb_table" "inbox" {
   name                        = "${var.prefix}-inbox"

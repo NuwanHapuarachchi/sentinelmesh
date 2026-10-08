@@ -1,10 +1,12 @@
 locals {
-  # Separate queue and concurrency per tier: an imminent alert never waits behind advisories.
+  # Separate queues and concurrency per tier, so an imminent alert never waits behind advisories:
+  # plan = planners (dispatch) per tier, send = senders per tier, sized to the SMS provider's throughput.
   tiers = {
-    imminent = { concurrency = 20 }
-    warning  = { concurrency = 5 }
-    advisory = { concurrency = 2 }
+    imminent = { plan = 5, send = 20 }
+    warning  = { plan = 2, send = 5 }
+    advisory = { plan = 2, send = 2 }
   }
+  sender_timeout = 120
 }
 
 resource "aws_sqs_queue" "dispatch_dlq" {
@@ -18,6 +20,22 @@ resource "aws_sqs_queue" "tier" {
   sqs_managed_sse_enabled    = true
   visibility_timeout_seconds = 120
   redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.dispatch_dlq.arn, maxReceiveCount = 3 })
+}
+
+# Batches of recipients planned by dispatch. A batch whose sends failed transiently comes back after the
+# visibility timeout (6 x the sender timeout, as Lambda recommends) and is retried for those recipients only;
+# after three tries it lands in the dead-letter queue, which is alarmed.
+resource "aws_sqs_queue" "send_dlq" {
+  name                    = "${local.name}-send-dlq"
+  sqs_managed_sse_enabled = true
+}
+
+resource "aws_sqs_queue" "send" {
+  for_each                   = local.tiers
+  name                       = "${local.name}-send-${each.key}"
+  sqs_managed_sse_enabled    = true
+  visibility_timeout_seconds = 6 * local.sender_timeout
+  redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.send_dlq.arn, maxReceiveCount = 3 })
 }
 
 module "issuer" {
@@ -52,6 +70,7 @@ module "issuer" {
   ]
 }
 
+# Planner: cell broadcast first, then the zone's subscribers in batches onto the tier's send queue.
 module "dispatch" {
   source = "../lambda_fn"
 
@@ -63,21 +82,21 @@ module "dispatch" {
   role_path    = var.role_path
   timeout      = 90
 
-  environment = merge({
-    CELL              = var.cell
-    SUBSCRIBERS_TABLE = var.delivery.subscribers.name
-    INBOX_TABLE       = var.delivery.inbox.name
-    ALERTS_TABLE      = var.delivery.alerts.name
-    WEB_BUCKET        = var.delivery.web_bucket.name
-    SMS_SECRET_ARN    = var.delivery.sms_secret_arn
-  }, var.sms_config)
+  environment = {
+    CELL                = var.cell
+    SUBSCRIBERS_TABLE   = var.delivery.subscribers.name
+    ALERTS_TABLE        = var.delivery.alerts.name
+    WEB_BUCKET          = var.delivery.web_bucket.name
+    SEND_QUEUE_IMMINENT = aws_sqs_queue.send["imminent"].url
+    SEND_QUEUE_WARNING  = aws_sqs_queue.send["warning"].url
+    SEND_QUEUE_ADVISORY = aws_sqs_queue.send["advisory"].url
+  }
 
   policy_statements = [
     { Effect = "Allow", Action = "dynamodb:Query", Resource = "${var.delivery.subscribers.arn}/index/by-zone" },
-    { Effect = "Allow", Action = "dynamodb:PutItem", Resource = var.delivery.inbox.arn },
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = var.delivery.alerts.arn },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.web_bucket.arn}/cb/*" },
-    { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = var.delivery.sms_secret_arn },
+    { Effect = "Allow", Action = "sqs:SendMessage", Resource = [for q in aws_sqs_queue.send : q.arn] },
     {
       Effect   = "Allow"
       Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
@@ -94,7 +113,52 @@ resource "aws_lambda_event_source_mapping" "dispatch" {
   function_response_types = ["ReportBatchItemFailures"]
 
   scaling_config {
-    maximum_concurrency = each.value.concurrency
+    maximum_concurrency = each.value.plan
+  }
+}
+
+# Sender: one batch per invocation, every recipient claimed in the delivery ledger before sending.
+module "sender" {
+  source = "../lambda_fn"
+
+  name         = "${local.name}-sender"
+  handler      = "sender.handler.handler"
+  zip_path     = var.zip_path
+  zip_hash     = var.zip_hash
+  boundary_arn = var.boundary_arn
+  role_path    = var.role_path
+  timeout      = local.sender_timeout
+
+  environment = merge({
+    CELL             = var.cell
+    DELIVERIES_TABLE = var.delivery.deliveries.name
+    INBOX_TABLE      = var.delivery.inbox.name
+    ALERTS_TABLE     = var.delivery.alerts.name
+    SMS_SECRET_ARN   = var.delivery.sms_secret_arn
+  }, var.sms_config)
+
+  policy_statements = [
+    { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = var.delivery.deliveries.arn },
+    { Effect = "Allow", Action = "dynamodb:PutItem", Resource = var.delivery.inbox.arn },
+    { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = var.delivery.alerts.arn },
+    { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = var.delivery.sms_secret_arn },
+    {
+      Effect   = "Allow"
+      Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+      Resource = [for q in aws_sqs_queue.send : q.arn]
+    },
+  ]
+}
+
+resource "aws_lambda_event_source_mapping" "sender" {
+  for_each                = local.tiers
+  function_name           = module.sender.arn
+  event_source_arn        = aws_sqs_queue.send[each.key].arn
+  batch_size              = 1
+  function_response_types = ["ReportBatchItemFailures"]
+
+  scaling_config {
+    maximum_concurrency = each.value.send
   }
 }
 

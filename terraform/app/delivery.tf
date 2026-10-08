@@ -63,6 +63,7 @@ locals {
     approvals          = { name = module.shared.tables.approvals, arn = module.shared.table_arns.approvals }
     subscribers        = { name = module.shared.tables.subscribers, arn = module.shared.table_arns.subscribers }
     inbox              = { name = module.shared.tables.inbox, arn = module.shared.table_arns.inbox }
+    deliveries         = { name = module.shared.tables.deliveries, arn = module.shared.table_arns.deliveries }
     web_bucket         = { name = module.shared.buckets.web, arn = module.shared.bucket_arns.web }
     decisions_bucket   = { name = module.shared.buckets.decisions, arn = module.shared.bucket_arns.decisions }
     approvals_fn_arn   = "arn:aws:lambda:${var.region}:${var.account_id}:function:${var.prefix}-approvals"

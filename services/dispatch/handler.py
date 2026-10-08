@@ -1,12 +1,14 @@
-"""Dispatch: consumes one cell's tier queues (imminent / warning / advisory, each with its own
-concurrency so urgent alerts never wait behind advisories) and delivers an alert:
+"""Dispatch (planner): consumes one cell's tier queues (imminent / warning / advisory, each with its own
+concurrency so urgent alerts never wait behind advisories) and fans an alert out:
 
-1. Cell-broadcast stand-in: cb/{zone}.json in the web bucket; phones in the zone poll it via CloudFront.
-2. Every subscriber in the zone, in their language, through the SMS adapter
-   (simulator -> phone inbox; http -> the third-party gateway).
+1. Cell-broadcast stand-in first: cb/{zone}.json in the web bucket; phones in the zone poll it via
+   CloudFront. Nothing on the SMS side can delay it.
+2. The zone's subscribers, page by page, as batches on the tier's send queue; sender Lambdas deliver them
+   in parallel (sender/handler.py). Re-planning a redelivered alert is safe: the delivery ledger stops
+   anyone being sent the same alert twice.
 
-Environment: SUBSCRIBERS_TABLE, INBOX_TABLE, ALERTS_TABLE, WEB_BUCKET, CELL, SMS_PROVIDER,
-SMS_SECRET_ARN, plus SMS_HTTP_* (see common/sms.py).
+Environment: SUBSCRIBERS_TABLE, ALERTS_TABLE, WEB_BUCKET, CELL, SEND_QUEUE_IMMINENT, SEND_QUEUE_WARNING,
+SEND_QUEUE_ADVISORY, BATCH_SIZE (recipients per send message, default 50).
 """
 
 import json
@@ -16,31 +18,29 @@ import time
 import boto3
 from boto3.dynamodb.conditions import Key
 
-from common import sms
 from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
-secrets = boto3.client("secretsmanager")
+sqs = boto3.client("sqs")
 subscribers = ddb.Table(os.environ["SUBSCRIBERS_TABLE"])
-inbox = ddb.Table(os.environ["INBOX_TABLE"])
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
-PROVIDER = os.environ.get("SMS_PROVIDER", "simulator")
-_secret_cache = {}
+SEND_QUEUES = {t: os.environ[f"SEND_QUEUE_{t.upper()}"] for t in ("imminent", "warning", "advisory")}
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "50"))
 
 
 def handler(event, context):
     failures = []
     for record in event.get("Records", []):
         try:
-            deliver(json.loads(record["body"]))
+            plan(json.loads(record["body"]))
         except Exception as exc:
             log("dispatch_failed", message_id=record["messageId"], error=str(exc))
             failures.append({"itemIdentifier": record["messageId"]})
     return {"batchItemFailures": failures}
 
 
-def deliver(alert):
+def plan(alert):
     now = time.time()
     zone_id, tier = alert["zone_id"], alert["tier"]
 
@@ -50,47 +50,42 @@ def deliver(alert):
         Body=json.dumps({**alert, "broadcast_at": int(now)}, ensure_ascii=False).encode("utf-8"),
     )
 
-    recipients = query_zone(zone_id)
-    sent = 0
-    for sub in recipients:
-        text = alert["texts"].get(sub.get("lang", "en"), alert["texts"]["en"])
-        ref = f"{alert['alert_id']}|{sub['subscriber_id']}"
-        if PROVIDER == "http" and sub.get("msisdn"):
-            result = sms.send_http(sub["msisdn"], text, ref, load_secret())
-            channel = "sms"
-        else:
-            result = {"status": "SENT"}
-            channel = "sim"
-        if channel == "sim" or result["status"] == "SENT":
-            inbox.put_item(Item={
-                "subscriber_id": sub["subscriber_id"], "sk": f"{int(now * 1000)}#{alert['alert_id']}",
-                "alert_id": alert["alert_id"], "tier": tier, "text": text, "lang": sub.get("lang", "en"),
-                "channel": channel, "status": alert.get("status", "Actual"),
-                "trigger_rx_ms": alert["trigger_rx_ms"], "expires_at": int(now) + 2 * 86400,
-            })
-            sent += 1
-        metric("Sent", 1, Channel=channel, Tier=tier, Result=result["status"])
-
-    alerts.update_item(
-        Key={"alert_id": alert["alert_id"], "sk": "META"},
-        UpdateExpression="SET sent = sent + :n, dispatched_at = :t",
-        ExpressionAttributeValues={":n": sent, ":t": int(now)},
-    )
-    metric("DispatchLagMs", now * 1000 - alert["trigger_rx_ms"], "Milliseconds", Tier=tier)
-    log("alert_dispatched", alert_id=alert["alert_id"], zone_id=zone_id, tier=tier, recipients=len(recipients), sent=sent)
-
-
-def query_zone(zone_id):
-    items, kwargs = [], {"IndexName": "by-zone", "KeyConditionExpression": Key("zone_id").eq(zone_id)}
+    queue, entries, audience, batches = SEND_QUEUES[tier], [], 0, 0
+    kwargs = {"IndexName": "by-zone", "KeyConditionExpression": Key("zone_id").eq(zone_id), "Limit": BATCH_SIZE}
     while True:
         page = subscribers.query(**kwargs)
-        items += page["Items"]
+        recipients = [
+            {"subscriber_id": s["subscriber_id"], "lang": s.get("lang", "en"), **({"msisdn": s["msisdn"]} if s.get("msisdn") else {})}
+            for s in page["Items"]
+        ]
+        if recipients:
+            body = json.dumps({"alert": alert, "recipients": recipients}, ensure_ascii=False)
+            entries.append({"Id": str(len(entries)), "MessageBody": body})
+            audience, batches = audience + len(recipients), batches + 1
+            if len(entries) == 10:  # SendMessageBatch takes at most 10
+                send_batch(queue, entries)
+                entries = []
         if "LastEvaluatedKey" not in page:
-            return items
+            break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    if entries:
+        send_batch(queue, entries)
+
+    item = alerts.update_item(
+        Key={"alert_id": alert["alert_id"], "sk": "META"},
+        UpdateExpression="SET audience = :a, batches = :b, planned_at = :t, dispatched_at = :t",
+        ExpressionAttributeValues={":a": audience, ":b": batches, ":t": int(now)},
+        ReturnValues="ALL_NEW",
+    )["Attributes"]
+    # Updates to one item are serialised, so exactly one of us sees the last send land after the audience
+    # is known: the planner (senders already done) or the sender that finishes last (sender/handler.py).
+    if audience and int(item.get("sent", 0)) >= audience:
+        metric("DrainSeconds", time.time() - now, "Seconds", Tier=tier)
+    metric("DispatchLagMs", now * 1000 - alert["trigger_rx_ms"], "Milliseconds", Tier=tier)
+    log("alert_planned", alert_id=alert["alert_id"], zone_id=zone_id, tier=tier, audience=audience, batches=batches)
 
 
-def load_secret():
-    if "v" not in _secret_cache:
-        _secret_cache["v"] = json.loads(secrets.get_secret_value(SecretId=os.environ["SMS_SECRET_ARN"])["SecretString"])
-    return _secret_cache["v"]
+def send_batch(queue, entries):
+    failed = sqs.send_message_batch(QueueUrl=queue, Entries=entries).get("Failed", [])
+    if failed:  # fail the alert message; it is re-planned and the ledger skips anyone already sent
+        raise RuntimeError(f"{len(failed)} send batches not queued: {failed[0].get('Code')}")

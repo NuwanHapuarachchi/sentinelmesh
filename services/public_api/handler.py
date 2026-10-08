@@ -8,7 +8,7 @@ POST /phone/ack          handset confirms receipt -> delivery receipt + time-to-
 POST /sms/dlr            third-party SMS delivery report (shared secret)
 
 Environment: ZONES_TABLE, STATE_TABLE, SUBSCRIBERS_TABLE, INBOX_TABLE, ALERTS_TABLE,
-RATELIMITS_TABLE, IOT_ENDPOINT, REPORT_PEPPER, SMS_SECRET_ARN.
+RATELIMITS_TABLE, DELIVERIES_TABLE, IOT_ENDPOINT, REPORT_PEPPER, SMS_SECRET_ARN.
 """
 
 import hashlib
@@ -37,6 +37,7 @@ subscribers = ddb.Table(os.environ["SUBSCRIBERS_TABLE"])
 inbox = ddb.Table(os.environ["INBOX_TABLE"])
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 limits = ddb.Table(os.environ["RATELIMITS_TABLE"])
+deliveries = ddb.Table(os.environ["DELIVERIES_TABLE"])
 
 ZONE_RE = re.compile(r"^[ZTH]\d{2}$")
 GEOHASH_RE = re.compile(r"^[0-9b-hjkmnp-z]{6}$")
@@ -162,6 +163,15 @@ def receipt(subscriber_id, sk, channel):
             return respond(200, {"duplicate": True})
         raise
     ttfa_ms = now * 1000 - int(item["trigger_rx_ms"])
+    try:
+        deliveries.update_item(
+            Key={"alert_id": item["alert_id"], "subscriber_id": subscriber_id},
+            UpdateExpression="SET #s = :d, delivered_at = :t", ConditionExpression="attribute_exists(subscriber_id)",
+            ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":d": "DELIVERED", ":t": int(now)},
+        )
+    except ClientError as exc:  # no ledger row (sent before the ledger existed): the inbox receipt still counts
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
     first = alerts.update_item(
         Key={"alert_id": item["alert_id"], "sk": "META"},
         UpdateExpression="ADD delivered :one SET first_receipt_ms = if_not_exists(first_receipt_ms, :ms)",
@@ -186,6 +196,5 @@ def dlr(event, body):
     metric("SmsDeliveryReports", 1, Status=status)
     if status != "DELIVERED":
         return respond(200, {"status": status})
-    msgs = inbox.query(KeyConditionExpression=Key("subscriber_id").eq(subscriber_id))["Items"]
-    match = next((m for m in msgs if m["alert_id"] == alert_id), None)
-    return receipt(subscriber_id, match["sk"], "sms") if match else respond(200, {"status": status})
+    sent = deliveries.get_item(Key={"alert_id": alert_id, "subscriber_id": subscriber_id}).get("Item") or {}
+    return receipt(subscriber_id, sent["inbox_sk"], "sms") if sent.get("inbox_sk") else respond(200, {"status": status})

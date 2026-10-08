@@ -36,6 +36,7 @@ module "public_api" {
     INBOX_TABLE       = local.t.inbox
     ALERTS_TABLE      = local.t.alerts
     RATELIMITS_TABLE  = local.t.ratelimits
+    DELIVERIES_TABLE  = local.t.deliveries
     IOT_ENDPOINT      = data.aws_iot_endpoint.data.endpoint_address
     REPORT_PEPPER     = random_password.report_pepper.result
     SMS_SECRET_ARN    = aws_secretsmanager_secret.sms.arn
@@ -47,6 +48,7 @@ module "public_api" {
     { Effect = "Allow", Action = "dynamodb:PutItem", Resource = local.a.subscribers },
     { Effect = "Allow", Action = ["dynamodb:Query", "dynamodb:UpdateItem"], Resource = local.a.inbox },
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = [local.a.alerts, local.a.ratelimits] },
+    { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = local.a.deliveries },
     { Effect = "Allow", Action = "iot:Publish", Resource = "arn:aws:iot:${var.region}:${var.account_id}:topic/sm/obs/*" },
     { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = aws_secretsmanager_secret.sms.arn },
   ]

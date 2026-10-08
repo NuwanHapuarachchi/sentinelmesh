@@ -119,6 +119,7 @@ resource "aws_cloudwatch_metric_alarm" "heartbeat" {
 locals {
   dlq_meaning = {
     dispatch = "Alerts failed to dispatch; people may be uncovered."
+    send     = "Recipients still unsent after three tries; people may be uncovered."
     stream   = "Observations failed scoring after retries; zones may be mis-scored."
     archive  = "Observations failed to reach the evidence lake; post-event replay will have a gap."
   }

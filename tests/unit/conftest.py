@@ -29,6 +29,7 @@ TABLES = {
     "subscribers": ("subscriber_id", None, {"by-zone": ("zone_id", None)}),
     "inbox": ("subscriber_id", "sk", {}),
     "ratelimits": ("k", None, {}),
+    "deliveries": ("alert_id", "subscriber_id", {}),
     "a-observations": ("zone_id", "sk", {}),
 }
 NUMERIC = {"issued_at", "created_at"}
@@ -80,6 +81,7 @@ class Stack:
         for bucket in BUCKETS.values():
             self.s3.create_bucket(Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": REGION})
         self.queues = {t: self.sqs.create_queue(QueueName=f"t-a-{t}")["QueueUrl"] for t in TIERS}
+        self.send_queues = {t: self.sqs.create_queue(QueueName=f"t-a-send-{t}")["QueueUrl"] for t in TIERS}
         self.topic_arn = self.sns.create_topic(Name="t-officers")["TopicArn"]
         self.secret_arn = self.secrets.create_secret(
             Name="t/sms-provider", SecretString=json.dumps({"api_key": "", "sender_id": "", "dlr_secret": "dlr-s3cret"})
@@ -92,12 +94,13 @@ class Stack:
         env = {
             "ZONES_TABLE": "t-zones", "STATE_TABLE": "t-zone-state", "ALERTS_TABLE": "t-alerts",
             "APPROVALS_TABLE": "t-approvals", "SUBSCRIBERS_TABLE": "t-subscribers", "INBOX_TABLE": "t-inbox",
-            "RATELIMITS_TABLE": "t-ratelimits", "CELL": "a", "RULES_VERSION": "test-sha",
+            "RATELIMITS_TABLE": "t-ratelimits", "DELIVERIES_TABLE": "t-deliveries", "CELL": "a", "RULES_VERSION": "test-sha",
             "OFFICERS_TOPIC_ARN": self.topic_arn, "SMS_SECRET_ARN": self.secret_arn, "SMS_PROVIDER": "simulator",
             "IOT_ENDPOINT": f"data-ats.iot.{REGION}.amazonaws.com", "REPORT_PEPPER": "pepper", "STATE_MACHINE_ARN": "",
             "SCENARIO_FUNCTION": "t-scenario",
             **BUCKETS,
             **{f"QUEUE_{t.upper()}": url for t, url in self.queues.items()},
+            **{f"SEND_QUEUE_{t.upper()}": url for t, url in self.send_queues.items()},
         }
         for k, v in env.items():
             monkeypatch.setenv(k, v)
@@ -110,9 +113,14 @@ class Stack:
         sys.modules.pop(module, None)
         return importlib.import_module(module)
 
-    def messages(self, tier):
-        out = self.sqs.receive_message(QueueUrl=self.queues[tier], MaxNumberOfMessages=10).get("Messages", [])
-        return [json.loads(m["Body"]) for m in out]
+    def messages(self, tier, queues=None):
+        """Drain a queue (tier queue by default) and return the decoded message bodies."""
+        url, bodies = (queues or self.queues)[tier], []
+        while out := self.sqs.receive_message(QueueUrl=url, MaxNumberOfMessages=10).get("Messages", []):
+            bodies += [json.loads(m["Body"]) for m in out]
+            entries = [{"Id": str(i), "ReceiptHandle": m["ReceiptHandle"]} for i, m in enumerate(out)]
+            self.sqs.delete_message_batch(QueueUrl=url, Entries=entries)
+        return bodies
 
     def keys(self, bucket, prefix=""):
         return [o["Key"] for o in self.s3.list_objects_v2(Bucket=BUCKETS[bucket], Prefix=prefix).get("Contents", [])]

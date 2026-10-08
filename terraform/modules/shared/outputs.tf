@@ -7,6 +7,7 @@ locals {
     subscribers = aws_dynamodb_table.subscribers
     inbox       = aws_dynamodb_table.inbox
     ratelimits  = aws_dynamodb_table.ratelimits
+    deliveries  = aws_dynamodb_table.deliveries
   }
 }
 
