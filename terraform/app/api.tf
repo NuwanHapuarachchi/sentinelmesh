@@ -5,6 +5,19 @@ resource "random_password" "report_pepper" {
   special = false
 }
 
+# The key for hashing reporters' phone numbers. In Secrets Manager rather than a Lambda environment
+# variable, so reading the function's configuration doesn't reveal it.
+resource "aws_secretsmanager_secret" "report_pepper" {
+  name                    = "${var.prefix}/report-pepper"
+  description             = "Key for hashing citizen reporters' phone numbers (numbers are never stored in clear)"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "report_pepper" {
+  secret_id     = aws_secretsmanager_secret.report_pepper.id
+  secret_string = random_password.report_pepper.result
+}
+
 data "aws_iot_endpoint" "data" {
   endpoint_type = "iot:Data-ATS"
 }
@@ -30,16 +43,16 @@ module "public_api" {
   role_path    = local.fn_common.role_path
 
   environment = {
-    ZONES_TABLE       = local.t.zones
-    STATE_TABLE       = local.t.zone_state
-    SUBSCRIBERS_TABLE = local.t.subscribers
-    INBOX_TABLE       = local.t.inbox
-    ALERTS_TABLE      = local.t.alerts
-    RATELIMITS_TABLE  = local.t.ratelimits
-    DELIVERIES_TABLE  = local.t.deliveries
-    IOT_ENDPOINT      = data.aws_iot_endpoint.data.endpoint_address
-    REPORT_PEPPER     = random_password.report_pepper.result
-    SMS_SECRET_ARN    = aws_secretsmanager_secret.sms.arn
+    ZONES_TABLE              = local.t.zones
+    STATE_TABLE              = local.t.zone_state
+    SUBSCRIBERS_TABLE        = local.t.subscribers
+    INBOX_TABLE              = local.t.inbox
+    ALERTS_TABLE             = local.t.alerts
+    RATELIMITS_TABLE         = local.t.ratelimits
+    DELIVERIES_TABLE         = local.t.deliveries
+    IOT_ENDPOINT             = data.aws_iot_endpoint.data.endpoint_address
+    SMS_SECRET_ARN           = aws_secretsmanager_secret.sms.arn
+    REPORT_PEPPER_SECRET_ARN = aws_secretsmanager_secret.report_pepper.arn
   }
 
   policy_statements = [
@@ -50,7 +63,7 @@ module "public_api" {
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = [local.a.alerts, local.a.ratelimits] },
     { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = local.a.deliveries },
     { Effect = "Allow", Action = "iot:Publish", Resource = "arn:aws:iot:${var.region}:${var.account_id}:topic/sm/obs/*" },
-    { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = aws_secretsmanager_secret.sms.arn },
+    { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = [aws_secretsmanager_secret.sms.arn, aws_secretsmanager_secret.report_pepper.arn] },
   ]
 }
 
@@ -452,7 +465,8 @@ resource "aws_wafv2_web_acl_association" "api" {
 }
 
 # WAF request logs (the name must start with aws-waf-logs-). Officer tokens, device tokens and the
-# delivery-report secret are redacted, so the logs hold no credentials.
+# delivery-report secret are redacted, so the logs hold no credentials. Query strings are redacted too:
+# gateways that can't send headers pass the delivery-report secret as ?k=.
 resource "aws_cloudwatch_log_group" "waf" {
   name              = "aws-waf-logs-${var.prefix}-api"
   retention_in_days = 14
@@ -478,5 +492,9 @@ resource "aws_wafv2_web_acl_logging_configuration" "api" {
     single_header {
       name = "x-dlr-secret"
     }
+  }
+
+  redacted_fields {
+    query_string {}
   }
 }

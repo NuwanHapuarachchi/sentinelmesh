@@ -86,6 +86,7 @@ class Stack:
         self.secret_arn = self.secrets.create_secret(
             Name="t/sms-provider", SecretString=json.dumps({"api_key": "", "sender_id": "", "dlr_secret": "dlr-s3cret"})
         )["ARN"]
+        self.pepper_arn = self.secrets.create_secret(Name="t/report-pepper", SecretString="pepper")["ARN"]
 
         with self.table("zones").batch_writer() as batch:
             for zone in ZONES:
@@ -96,7 +97,7 @@ class Stack:
             "APPROVALS_TABLE": "t-approvals", "SUBSCRIBERS_TABLE": "t-subscribers", "INBOX_TABLE": "t-inbox",
             "RATELIMITS_TABLE": "t-ratelimits", "DELIVERIES_TABLE": "t-deliveries", "CELL": "a", "RULES_VERSION": "test-sha",
             "OFFICERS_TOPIC_ARN": self.topic_arn, "SMS_SECRET_ARN": self.secret_arn, "SMS_PROVIDER": "simulator",
-            "IOT_ENDPOINT": f"data-ats.iot.{REGION}.amazonaws.com", "REPORT_PEPPER": "pepper", "STATE_MACHINE_ARN": "",
+            "IOT_ENDPOINT": f"data-ats.iot.{REGION}.amazonaws.com", "REPORT_PEPPER_SECRET_ARN": self.pepper_arn, "STATE_MACHINE_ARN": "",
             "SCENARIO_FUNCTION": "t-scenario",
             **BUCKETS,
             **{f"QUEUE_{t.upper()}": url for t, url in self.queues.items()},

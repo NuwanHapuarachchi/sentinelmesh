@@ -8,7 +8,7 @@ POST /phone/ack          handset confirms receipt -> delivery receipt + time-to-
 POST /sms/dlr            third-party SMS delivery report (shared secret)
 
 Environment: ZONES_TABLE, STATE_TABLE, SUBSCRIBERS_TABLE, INBOX_TABLE, ALERTS_TABLE,
-RATELIMITS_TABLE, DELIVERIES_TABLE, IOT_ENDPOINT, REPORT_PEPPER, SMS_SECRET_ARN.
+RATELIMITS_TABLE, DELIVERIES_TABLE, IOT_ENDPOINT, REPORT_PEPPER_SECRET_ARN, SMS_SECRET_ARN.
 """
 
 import hashlib
@@ -31,6 +31,7 @@ from common.observe import log, metric
 ddb = boto3.resource("dynamodb")
 iot = boto3.client("iot-data", endpoint_url=f"https://{os.environ['IOT_ENDPOINT']}")
 secrets = boto3.client("secretsmanager")
+_pepper = {}
 zones = ddb.Table(os.environ["ZONES_TABLE"])
 states = ddb.Table(os.environ["STATE_TABLE"])
 subscribers = ddb.Table(os.environ["SUBSCRIBERS_TABLE"])
@@ -72,8 +73,16 @@ def require(cond, message):
         raise ValueError(message)
 
 
+def pepper():
+    """The reporter-hash key, from Secrets Manager (not a plain environment variable anyone reading the
+    function's configuration could see). Cached for the life of the container."""
+    if "v" not in _pepper:
+        _pepper["v"] = secrets.get_secret_value(SecretId=os.environ["REPORT_PEPPER_SECRET_ARN"])["SecretString"]
+    return _pepper["v"]
+
+
 def reporter_hash(phone):
-    return hmac.new(os.environ["REPORT_PEPPER"].encode(), sms.normalise_msisdn(phone).encode(), hashlib.sha256).hexdigest()[:24]
+    return hmac.new(pepper().encode(), sms.normalise_msisdn(phone).encode(), hashlib.sha256).hexdigest()[:24]
 
 
 def report(body):
