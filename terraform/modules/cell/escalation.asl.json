@@ -119,7 +119,8 @@
         "alert_id.$": "$.Payload.alert_id",
         "queue_url.$": "$.Payload.queue_url",
         "message.$": "$.Payload.message",
-        "summary.$": "$.Payload.summary"
+        "summary.$": "$.Payload.summary",
+        "is_test.$": "$.Payload.is_test"
       },
       "ResultPath": "$.issue",
       "Retry": [
@@ -142,7 +143,13 @@
       },
       "ResultPath": null,
       "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "BackoffRate": 2, "MaxAttempts": 4 }],
-      "Next": "NotifyOfficers"
+      "Next": "IsTestAlert"
+    },
+    "IsTestAlert": {
+      "Comment": "Heartbeat and e2e alerts (test zones) never email officers.",
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.issue.is_test", "BooleanEquals": true, "Next": "Done" }],
+      "Default": "NotifyOfficers"
     },
     "NotifyOfficers": {
       "Type": "Task",

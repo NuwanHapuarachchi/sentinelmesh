@@ -104,6 +104,18 @@ def test_bypass_issues_imminent_when_scorer_is_off(aws, publish, reset_zone, out
         lam.update_event_source_mapping(UUID=mapping, Enabled=True)
 
 
+def test_bypass_alert_in_a_test_zone_is_never_actual(aws, publish, reset_zone):
+    # The bypass input has no is_test flag; the issuer must still label a test zone's alert "Test"
+    # (this is the heartbeat's path, which used to go out as "Actual").
+    reset_zone("T03", owner="b")
+    since = time.time()
+    danger = float(zone_cfg(aws, "T03")["danger_level_m"])
+    publish("T03", "gauge", level_m=danger + 0.2, drill=False)
+    alert = wait_for(lambda: alerts_for(aws, "T03", since), timeout=90)[0]
+    assert alert["tier"] == "imminent"
+    assert alert["status"] == "Test"
+
+
 def test_silence_after_rising_marks_zone_blind(aws, publish, reset_zone):
     reset_zone("T04", owner="b")
     base = gauge_level(aws, "T04", 0.62)

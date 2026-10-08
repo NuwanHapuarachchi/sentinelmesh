@@ -93,7 +93,8 @@ def list_alerts(officer):
     for days_ago in (0, 1):
         day = (datetime.now(UTC) - timedelta(days=days_ago)).strftime("%Y%m%d")
         items += alerts.query(IndexName="by-day", KeyConditionExpression=Key("day").eq(day), ScanIndexForward=False)["Items"]
-    items = [i for i in items if i.get("status") != "Test"]
+    # Hidden test, heartbeat and load zones (T, H, L) never appear, whatever status their alerts carry.
+    items = [i for i in items if i.get("status") != "Test" and not str(i.get("zone_id", "")).startswith(("T", "H", "L"))]
     if not officer:
         return respond(200, {"count": len(items)})
     keep = ("alert_id", "zone_id", "zone_name", "district", "tier", "hazard", "status", "mode", "issued_at", "sent",

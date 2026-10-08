@@ -41,7 +41,10 @@ def issue(inp, approval):
     zone = zones.get_item(Key={"zone_id": inp["zone_id"]})["Item"]
     zone["polygon"] = json.loads(zone["polygon"])
     tier, hazard = inp["tier"], inp.get("hazard", "flood")
-    status = "Test" if inp.get("is_test") else ("Exercise" if inp.get("drill") else "Actual")
+    # The zone catalogue decides what is a test: the IoT bypass input carries no is_test flag, and a
+    # heartbeat or e2e alert must never go out as "Actual".
+    is_test = bool(inp.get("is_test")) or bool(zone.get("is_test"))
+    status = "Test" if is_test else ("Exercise" if inp.get("drill") else "Actual")
     day = datetime.fromtimestamp(now, UTC).strftime("%Y%m%d")
     alert_id = f"SM-{day}-{inp['zone_id']}-{uuid.uuid4().hex[:6].upper()}"
     mode = approval.get("decision") or ("auto" if tier != "warning" else "timeout")
@@ -75,7 +78,7 @@ def issue(inp, approval):
     summary = (f"{status} {tier.upper()} {hazard} alert {alert_id} issued for {zone['name']} "
                f"({zone['district']}). Mode: {mode}. Score {inp.get('score')}. Reason: {inp.get('reason')}.")
     return {"alert_id": alert_id, "queue_url": QUEUES[tier], "message": json.dumps(message, ensure_ascii=False),
-            "summary": summary}
+            "summary": summary, "is_test": is_test}
 
 
 def mark_auto_issued(approval_id):
