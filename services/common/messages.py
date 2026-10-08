@@ -16,16 +16,19 @@ TEMPLATES = {
         "imminent": "EMERGENCY {zone}: {hazard} imminent. Move to safe high ground NOW. Do not wait. Ref {ref}",
         "warning": "WARNING {zone}: {hazard} likely in the next hours. Prepare to evacuate. Ref {ref}",
         "advisory": "ADVISORY {zone}: {hazard} risk rising. Stay alert and follow official updates. Ref {ref}",
+        "clear": "ALL CLEAR {zone}: {hazard} danger has passed. Follow official advice before returning. Ref {ref}",
     },
     "si": {
         "imminent": "හදිසි {zone}: {hazard} ආසන්නයි. දැන්ම උස් ආරක්ෂිත ස්ථානයකට යන්න.",
         "warning": "අනතුරු ඇඟවීම {zone}: {hazard} අවදානම. ඉවත්වීමට සූදානම් වන්න.",
         "advisory": "දැනුම්දීම {zone}: {hazard} අවදානම ඉහළයි. සැලකිලිමත් වන්න.",
+        "clear": "අවදානම අවසන් {zone}: {hazard} අනතුර පහව ගොස් ඇත. නිල උපදෙස් පිළිපදින්න.",
     },
     "ta": {
         "imminent": "அவசரம் {zone}: {hazard} உடனடி. உடனே உயரமான இடத்துக்கு செல்லவும்.",
         "warning": "எச்சரிக்கை {zone}: {hazard} அபாயம். வெளியேற தயாராகுங்கள்.",
         "advisory": "அறிவிப்பு {zone}: {hazard} அபாயம் உயர்கிறது. கவனமாக இருங்கள்.",
+        "clear": "அபாயம் நீங்கியது {zone}: {hazard} ஆபத்து கடந்தது. அறிவுரையை கேளுங்கள்.",
     },
 }
 

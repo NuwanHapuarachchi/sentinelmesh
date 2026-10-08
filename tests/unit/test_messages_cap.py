@@ -11,7 +11,7 @@ LONGEST_ID = max((z["zone_id"] for z in ZONES), key=len)
 NS = {"c": cap.NS}
 
 
-@pytest.mark.parametrize("tier", ["imminent", "warning", "advisory"])
+@pytest.mark.parametrize("tier", ["imminent", "warning", "advisory", "clear"])
 @pytest.mark.parametrize("hazard", ["flood", "landslide"])
 def test_every_template_fits_one_sms_segment(tier, hazard):
     for lang in messages.TEMPLATES:
@@ -61,3 +61,19 @@ def test_drills_are_exercises():
     root = ET.fromstring(cap.build("X", ZONES[0], "warning", "landslide", 1_791_400_000, status="Exercise"))
     assert root.find("c:status", NS).text == "Exercise"
     assert root.find("c:info/c:category", NS).text == "Geo"
+
+
+def test_all_clear_is_an_update_that_references_the_alert_it_ends():
+    ref = cap.reference("SM-20261008-Z01-ABC123", 1_791_400_000)
+    root = ET.fromstring(cap.build("SM-20261008-Z01-DEF456", ZONES[0], "clear", "flood", 1_791_403_600, references=[ref]))
+    assert root.find("c:msgType", NS).text == "Update"
+    assert root.find("c:references", NS).text == f"{cap.SENDER},SM-20261008-Z01-ABC123,{cap.cap_time(1_791_400_000)}"
+    assert [c.tag.split("}")[1] for c in root][:7] == ["identifier", "sender", "sent", "status", "msgType", "scope", "references"]
+    info = root.find("c:info", NS)
+    assert (info.find("c:responseType", NS).text, info.find("c:urgency", NS).text) == ("AllClear", "Past")
+    assert info.find("c:headline", NS).text.startswith("ALL CLEAR")
+
+
+def test_a_new_alert_has_no_references():
+    root = ET.fromstring(cap.build("X", ZONES[0], "warning", "flood", 1_791_400_000))
+    assert root.find("c:msgType", NS).text == "Alert" and root.find("c:references", NS) is None

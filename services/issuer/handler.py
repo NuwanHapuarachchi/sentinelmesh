@@ -1,12 +1,16 @@
 """Issuer: called by the escalation workflow.
 
 op=issue  -> alert id, CAP 1.2 file, alert record, decision record, message for the tier queue.
-op=record -> decision record only, for a warning that was not issued:
-             mode=rejected   (an officer held it back)
-             mode=superseded (a higher tier was issued, or the zone fell below advisory, while it waited)
+             tier=clear is an all-clear: a CAP Update (AllClear) referencing the zone's last alert, sent on
+             the advisory queue. Any other tier is recorded as the zone's last alert, which a later
+             all-clear will reference.
+op=record -> decision record only, for a warning or all-clear that was not issued:
+             mode=rejected    (an officer held it back)
+             mode=superseded  (a higher tier was issued, or the zone fell below advisory / rose again, while it waited)
+             mode=unconfirmed (nobody confirmed an all-clear in time, so the earlier alert stays in force)
 
 Decision records are write-once: the bucket policy rejects any PutObject without If-None-Match.
-Environment: ALERTS_TABLE, APPROVALS_TABLE, ZONES_TABLE, WEB_BUCKET, DECISIONS_BUCKET, CELL,
+Environment: ALERTS_TABLE, APPROVALS_TABLE, ZONES_TABLE, STATE_TABLE, WEB_BUCKET, DECISIONS_BUCKET, CELL,
 QUEUE_IMMINENT, QUEUE_WARNING, QUEUE_ADVISORY, RULES_VERSION.
 """
 
@@ -29,7 +33,9 @@ s3 = boto3.client("s3")
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 approvals = ddb.Table(os.environ["APPROVALS_TABLE"])
 zones = ddb.Table(os.environ["ZONES_TABLE"])
+states = ddb.Table(os.environ["STATE_TABLE"])
 QUEUES = {t: os.environ[f"QUEUE_{t.upper()}"] for t in ("imminent", "warning", "advisory")}
+QUEUES["clear"] = QUEUES["advisory"]  # an all-clear is not urgent
 # Approval states the workflow may still move an approval out of (an officer may be mid-decision).
 OPEN = ("PENDING", "DECIDING")
 
@@ -37,12 +43,14 @@ OPEN = ("PENDING", "DECIDING")
 def handler(event, context):
     if event.get("op") == "record":
         mode = event.get("mode", "rejected")
-        if mode not in ("rejected", "superseded"):
+        if mode not in ("rejected", "superseded", "unconfirmed"):
             raise ValueError(f"unknown record mode {mode!r}")
         approval = event.get("approval") or {}
         if mode == "superseded":
             # An approved warning can still be superseded before it issues, so APPROVED moves too.
             settle_approval(approval.get("approval_id"), "SUPERSEDED", (*OPEN, "APPROVED"))
+        elif mode == "unconfirmed":
+            settle_approval(approval.get("approval_id"), "EXPIRED", OPEN)
         return record_decision(event["input"], mode=mode, approval=approval, execution=event.get("execution"),
                                at=epoch(event.get("entered")))
     return issue(event["input"], event.get("approval") or {}, event.get("execution"), event.get("entered"))
@@ -70,8 +78,9 @@ def issue(inp, approval, execution=None, entered=None):
     alert_id = f"SM-{day}-{inp['zone_id']}-{suffix.upper()}"
     mode = approval.get("decision") or ("auto" if tier != "warning" else "timeout")
     trigger_rx_ms = int(inp.get("trigger_rx_ms") or issued * 1000)
+    references = previous_alerts(inp.get("references")) if tier == "clear" else []
 
-    xml = cap.build(alert_id, zone, tier, hazard, issued, status=status)
+    xml = cap.build(alert_id, zone, tier, hazard, issued, status=status, references=references)
     cap_key = f"cap/{day}/{alert_id}.xml"
     s3.put_object(Bucket=os.environ["WEB_BUCKET"], Key=cap_key, Body=xml.encode("utf-8"),
                   ContentType="application/cap+xml", CacheControl="public, max-age=31536000, immutable")
@@ -91,6 +100,9 @@ def issue(inp, approval, execution=None, entered=None):
         if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
         log("alert_retry", alert_id=alert_id)  # a retry of this execution; the record already exists
+    if tier != "clear":
+        states.update_item(Key={"zone_id": inp["zone_id"]}, UpdateExpression="SET last_alert_id = :a",
+                           ExpressionAttributeValues={":a": alert_id})
     if tier == "warning" and mode == "timeout":
         settle_approval(approval.get("approval_id") or inp.get("approval_id"), "AUTO_ISSUED", OPEN)
     record_decision(inp, mode=mode, approval=approval, alert_id=alert_id, cap_sha=cap_sha, execution=execution, at=issued)
@@ -105,6 +117,16 @@ def issue(inp, approval, execution=None, entered=None):
                f"({zone['district']}). Mode: {mode}. Score {inp.get('score')}. Reason: {inp.get('reason')}.")
     return {"alert_id": alert_id, "queue_url": QUEUES[tier], "message": json.dumps(message, ensure_ascii=False),
             "summary": summary, "is_test": is_test}
+
+
+def previous_alerts(alert_ids):
+    """CAP references for the alerts an all-clear ends (those that can still be found)."""
+    refs = []
+    for alert_id in alert_ids or []:
+        item = alerts.get_item(Key={"alert_id": alert_id, "sk": "META"}).get("Item")
+        if item:
+            refs.append(cap.reference(alert_id, int(item["issued_at"])))
+    return refs
 
 
 def settle_approval(approval_id, status, from_statuses):

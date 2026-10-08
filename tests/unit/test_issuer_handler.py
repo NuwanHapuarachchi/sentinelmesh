@@ -129,3 +129,33 @@ def test_record_retries_write_one_decision(stack, issuer):
     issuer.handler(event, None)
     issuer.handler(event, None)
     assert stack.keys("DECISIONS_BUCKET", "decisions/") == ["decisions/2026/10/08/Z07/Z07-warning-e1-1-superseded.json"]
+
+
+def test_an_alert_becomes_the_zones_last_alert(stack, issuer):
+    out = issue(issuer, bypass_input("Z07"))
+    assert stack.table("zone-state").get_item(Key={"zone_id": "Z07"})["Item"]["last_alert_id"] == out["alert_id"]
+
+
+def test_all_clear_references_the_last_alert_and_goes_out_as_advisory(stack, issuer):
+    first = issue(issuer, bypass_input("Z07"), approval={"decision": "auto"})
+    inp = {**bypass_input("Z07"), "tier": "clear", "origin": "scorer", "references": [first["alert_id"]]}
+    out = issuer.handler({"op": "issue", "input": inp, "approval": {"decision": "approve", "decided_by": "o@test"},
+                          "execution": "Z07-clear-e1-1", "entered": "2026-10-08T08:00:00Z"}, None)
+    assert out["queue_url"] == stack.queues["advisory"]
+    assert json.loads(out["message"])["texts"]["en"].startswith("ALL CLEAR Z07")
+    root = ET.fromstring(stack.body("WEB_BUCKET", alert_item(stack, out["alert_id"])["cap_key"]))
+    assert root.find(f"{{{cap.NS}}}msgType").text == "Update"
+    assert first["alert_id"] in root.find(f"{{{cap.NS}}}references").text
+    assert alert_item(stack, out["alert_id"])["mode"] == "approve"
+    # the all-clear does not become the zone's last alert
+    assert stack.table("zone-state").get_item(Key={"zone_id": "Z07"})["Item"]["last_alert_id"] == first["alert_id"]
+
+
+def test_unconfirmed_all_clear_expires_its_approval(stack, issuer):
+    stack.table("approvals").put_item(Item={"approval_id": "C1", "status": "PENDING", "pending": "PENDING", "created_at": 1})
+    inp = {**bypass_input("Z07"), "tier": "clear", "origin": "scorer"}
+    issuer.handler({"op": "record", "mode": "unconfirmed", "input": inp, "execution": "Z07-clear-e1-1",
+                    "approval": {"decision": "timeout", "approval_id": "C1"}}, None)
+    assert stack.table("approvals").get_item(Key={"approval_id": "C1"})["Item"]["status"] == "EXPIRED"
+    [key] = stack.keys("DECISIONS_BUCKET", "decisions/")
+    assert json.loads(stack.body("DECISIONS_BUCKET", key))["mode"] == "unconfirmed"

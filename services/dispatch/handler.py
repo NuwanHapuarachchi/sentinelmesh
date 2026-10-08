@@ -26,6 +26,7 @@ sqs = boto3.client("sqs")
 subscribers = ddb.Table(os.environ["SUBSCRIBERS_TABLE"])
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 SEND_QUEUES = {t: os.environ[f"SEND_QUEUE_{t.upper()}"] for t in ("imminent", "warning", "advisory")}
+SEND_QUEUES["clear"] = SEND_QUEUES["advisory"]  # an all-clear is not urgent
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "50"))
 
 

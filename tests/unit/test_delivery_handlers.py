@@ -161,3 +161,11 @@ def test_phone_ack_and_sms_report_mark_the_ledger_delivered(stack, sender):
     assert ledger["s2"]["status"] == "DELIVERED" and ledger["s2"]["delivered_at"] > 0
     assert ledger["s1"]["status"] == "SENT"
     assert stack.table("alerts").get_item(Key={"alert_id": "SM-1", "sk": "META"})["Item"]["delivered"] == 1
+
+
+def test_an_all_clear_is_planned_onto_the_advisory_send_queue(stack, planner):
+    a = alert(tier="clear")
+    put_alert_meta(stack, a)
+    subscribe(stack, 1)
+    planner.handler(sqs_event(a), None)
+    assert len(stack.messages("advisory", stack.send_queues)) == 1

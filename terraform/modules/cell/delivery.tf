@@ -53,6 +53,7 @@ module "issuer" {
     ALERTS_TABLE     = var.delivery.alerts.name
     APPROVALS_TABLE  = var.delivery.approvals.name
     ZONES_TABLE      = var.zones_table.name
+    STATE_TABLE      = var.state_table.name
     WEB_BUCKET       = var.delivery.web_bucket.name
     DECISIONS_BUCKET = var.delivery.decisions_bucket.name
     QUEUE_IMMINENT   = aws_sqs_queue.tier["imminent"].url
@@ -63,8 +64,8 @@ module "issuer" {
 
   policy_statements = [
     { Effect = "Allow", Action = "dynamodb:GetItem", Resource = var.zones_table.arn },
-    { Effect = "Allow", Action = "dynamodb:PutItem", Resource = var.delivery.alerts.arn },
-    { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = var.delivery.approvals.arn },
+    { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:GetItem"], Resource = var.delivery.alerts.arn },
+    { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = [var.delivery.approvals.arn, var.state_table.arn] },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.web_bucket.arn}/cap/*" },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.decisions_bucket.arn}/decisions/*" },
   ]
