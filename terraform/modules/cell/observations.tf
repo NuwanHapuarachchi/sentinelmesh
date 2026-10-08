@@ -101,3 +101,37 @@ resource "aws_iot_topic_rule" "route" {
 
   depends_on = [aws_iam_role_policy.iot_rules]
 }
+
+# Field devices publish to sm/dev/{zone}/{class} with their own certificates (terraform/app/iot.tf). The
+# class comes from the topic (which the device policy pins to the thing's attributes) and the source from the
+# certificate's client id, so a device can't claim to be a forecast, another station or a drill.
+resource "aws_iot_topic_rule" "route_devices" {
+  name        = "${local.rule_prefix}_route_devices"
+  enabled     = true
+  sql_version = "2016-03-23"
+  sql         = <<-SQL
+    SELECT topic(3) AS zone_id, topic(4) AS source_class,
+           concat(timestamp(), '#', topic(4), '#', newuuid()) AS sk,
+           timestamp() AS rx_ms, timestamp() / 1000 + 604800 AS expires_at,
+           principal() AS principal, clientid() AS client_id, clientid() AS source_id,
+           ts, level_m, rain_24h_mm, tilt_deg
+    FROM 'sm/dev/+/+'
+    WHERE get_dynamodb('${var.zones_table.name}', 'zone_id', topic(3), '${aws_iam_role.iot_rules.arn}').owner_cell = '${var.cell}'
+  SQL
+
+  dynamodbv2 {
+    role_arn = aws_iam_role.iot_rules.arn
+    put_item {
+      table_name = aws_dynamodb_table.observations.name
+    }
+  }
+
+  error_action {
+    cloudwatch_logs {
+      log_group_name = aws_cloudwatch_log_group.iot_errors.name
+      role_arn       = aws_iam_role.iot_rules.arn
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.iot_rules]
+}

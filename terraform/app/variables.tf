@@ -40,6 +40,12 @@ variable "rules_version" {
   default     = "dev"
 }
 
+variable "revoked_devices" {
+  description = "Field device things whose certificates are deactivated (revocation demo), e.g. [\"sentinelmesh-gauge-Z07\"]."
+  type        = list(string)
+  default     = []
+}
+
 variable "officers" {
   description = "Console users: email => group, or \"ems:District\" for an EMS user scoped to one district. Groups: duty_officer, met, ems, ngo, viewer. Set via TF_VAR_officers in GitLab."
   type        = map(string)

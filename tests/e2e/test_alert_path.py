@@ -9,10 +9,15 @@
 """
 
 import json
+import tempfile
 import time
+from pathlib import Path
 
+import pytest
 from boto3.dynamodb.conditions import Key
 from conftest import alerts_for, table, wait_for
+
+from edge import mqtt
 
 
 def zone_cfg(aws, zone_id):
@@ -212,3 +217,43 @@ def test_all_clear_goes_out_only_after_an_officer_confirms(aws, publish, reset_z
     assert "<msgType>Update</msgType>" in cap_xml and first["alert_id"] in cap_xml
     wait_for(lambda: [m for m in table(aws, "inbox").query(KeyConditionExpression=Key("subscriber_id").eq(sid))["Items"]
                       if m["alert_id"] == clear["alert_id"]])
+
+
+def device_station(aws, thing="sentinelmesh-gauge-T01"):
+    """A real MQTT/TLS client for a test station, using its certificate from Secrets Manager."""
+    secret = json.loads(aws["s"].client("secretsmanager").get_secret_value(SecretId=f"sentinelmesh/devices/{thing}")["SecretString"])
+    folder = Path(tempfile.mkdtemp())
+    (folder / "c.pem").write_text(secret["certificate_pem"])
+    (folder / "k.pem").write_text(secret["private_key_pem"])
+    context = mqtt.tls_context(str(folder / "c.pem"), str(folder / "k.pem"))
+    return mqtt.Client(secret["endpoint"], thing, context).connect()
+
+
+def test_device_readings_are_attributed_by_certificate(aws, reset_zone):
+    reset_zone("T01", owner="a")
+    client = device_station(aws)
+    since_ms = int(time.time() * 1000)
+    try:
+        # The payload claims to be a drill forecast from elsewhere; the rule ignores that and uses the topic and certificate.
+        client.publish("sm/dev/T01/gauge", json.dumps({"ts": time.time(), "level_m": 1.0, "source_class": "forecast",
+                                                       "source_id": "spoofed", "drill": True}).encode())
+    finally:
+        client.close()
+    item = wait_for(lambda: aws["ddb"].Table("sentinelmesh-a-observations").query(
+        KeyConditionExpression=Key("zone_id").eq("T01") & Key("sk").gt(str(since_ms)))["Items"])[0]
+    assert item["source_class"] == "gauge" and item["source_id"] == "sentinelmesh-gauge-T01"
+    assert "drill" not in item and item["principal"]
+
+
+def test_a_device_cannot_publish_for_another_zone(aws, reset_zone):
+    reset_zone("T02", owner="a")
+    client = device_station(aws)
+    since_ms = int(time.time() * 1000)
+    try:
+        with pytest.raises((mqtt.MqttError, OSError)):  # IoT Core drops the connection on an unauthorised publish
+            client.publish("sm/dev/T02/gauge", json.dumps({"ts": time.time(), "level_m": 9.9}).encode())
+    finally:
+        client.close()
+    time.sleep(10)
+    assert not aws["ddb"].Table("sentinelmesh-a-observations").query(
+        KeyConditionExpression=Key("zone_id").eq("T02") & Key("sk").gt(str(since_ms)))["Items"]

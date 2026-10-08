@@ -296,3 +296,33 @@ resource "aws_iot_topic_rule" "bypass" {
 
   depends_on = [aws_iam_role_policy.bypass]
 }
+
+# The same hard threshold for certificate-authenticated gauges (sm/dev/{zone}/gauge).
+resource "aws_iot_topic_rule" "bypass_devices" {
+  name        = "${local.rule_prefix}_bypass_devices"
+  enabled     = true
+  sql_version = "2016-03-23"
+  sql         = <<-SQL
+    SET @z = get_dynamodb('${var.zones_table.name}', 'zone_id', topic(3), '${aws_iam_role.bypass.arn}')
+    SELECT topic(3) AS zone_id, 'imminent' AS tier, 'flood' AS hazard, 'hard_threshold' AS reason,
+           'bypass' AS origin, '${var.cell}' AS cell, 1.0 AS score, level_m, clientid() AS source_id,
+           timestamp() AS trigger_rx_ms
+    FROM 'sm/dev/+/gauge'
+    WHERE level_m < 60 AND @z.owner_cell = '${var.cell}' AND level_m >= @z.danger_level_m
+  SQL
+
+  step_functions {
+    state_machine_name    = aws_sfn_state_machine.escalation.name
+    execution_name_prefix = "bypass"
+    role_arn              = aws_iam_role.bypass.arn
+  }
+
+  error_action {
+    cloudwatch_logs {
+      log_group_name = aws_cloudwatch_log_group.iot_errors.name
+      role_arn       = aws_iam_role.bypass.arn
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.bypass]
+}

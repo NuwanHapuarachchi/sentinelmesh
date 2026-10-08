@@ -128,7 +128,7 @@ py-lint:
     - when: on_success
   script:
     - pip install -q ruff==0.14.0
-    - ruff check services tests scripts
+    - ruff check services tests scripts edge
 
 unit-tests:
   extends: .py

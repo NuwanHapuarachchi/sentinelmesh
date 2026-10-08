@@ -13,6 +13,7 @@ Everything is Terraform and everything runs in GitLab CI/CD. Nobody provisions f
 | `terraform/modules/` | `shared` (tables, buckets), `cell` (one detection and delivery cell), `lambda_fn` (one function with its own role and logs) |
 | `services/` | Lambda code (Python 3.13, stdlib + boto3) |
 | `web/` | Dashboard, officer console, simulated phone |
+| `edge/` | Programs that run outside AWS: `field_gateway.py` (a simulated station with its own X.509 certificate) and the standard-library MQTT client they share |
 | `tests/unit`, `tests/web`, `tests/e2e`, `tests/load` | Tests run by the pipeline (unit with moto, the phone page in Node, live end-to-end, burst) |
 | `scripts/gen_zones.py` | Generates the 80 hazard zones + test, heartbeat and load zones |
 | `scripts/put_secrets.py` | Writes SMS gateway credentials into Secrets Manager (configure-secrets job) |
@@ -60,6 +61,16 @@ Optional variables: `TF_VAR_officer_email` (alarm and budget emails), `TF_VAR_of
 `TF_VAR_officers` is a JSON map of email to role, for example `{"duty@team.example": "duty_officer", "met@team.example": "met", "ems@team.example": "ems:Kegalle", "ngo@team.example": "ngo"}`. Roles: `duty_officer` (everything, plus approvals, drills and failover), `met` (all zones with sensor evidence, alerts without people counts), `ems:District` (one district, no evidence), `ngo` and `viewer` (counts per district). The API enforces this (`services/console_api/handler.py`); passwords are generated and stored in Secrets Manager (`sentinelmesh/officer-logins`).
 
 The gateway's credentials never go through Terraform: add `SMS_PROVIDER_API_KEY` (and optionally `SMS_SENDER_ID`, `SMS_DLR_SECRET`) as masked, protected variables and run the manual **configure-secrets** job on `main`, which writes them into Secrets Manager. If `SMS_DLR_SECRET` is not set, one is generated; read it in Secrets Manager (`sentinelmesh/sms-provider`) to configure the gateway's delivery reports.
+
+## Field devices
+
+Stations `sentinelmesh-gauge-Z07`, `-Z35` and `-T01` are IoT things with their own certificates (`terraform/app/iot.tf`). Each may connect only as itself and publish only to `sm/dev/{its zone}/{its class}`; the routing rules take the class and source from the topic and certificate, not the payload. Run one with your AWS credentials (it reads its certificate from Secrets Manager):
+
+```bash
+python edge/field_gateway.py --thing sentinelmesh-gauge-Z07 --profile rising
+```
+
+To show revocation, set `TF_VAR_revoked_devices` to `["sentinelmesh-gauge-Z07"]` and apply: the station is refused, buffers its readings, and the zone turns blind on the map.
 
 ## Teardown after the competition
 
