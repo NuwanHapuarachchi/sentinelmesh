@@ -9,9 +9,9 @@ SLT = timezone(timedelta(hours=5, minutes=30))
 MIDNIGHT = datetime(2026, 10, 8, tzinfo=SLT)
 
 
-def hourly(values):
-    """Open-Meteo hourly block: 48 hours from local midnight today."""
-    times = [(MIDNIGHT + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M") for h in range(48)]
+def hourly(values, midnight=MIDNIGHT):
+    """Open-Meteo hourly block: 48 hours from local midnight (of the given day)."""
+    times = [(midnight + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M") for h in range(48)]
     return {"time": times, "precipitation": values}
 
 
@@ -39,7 +39,8 @@ def test_unknown_current_hour_falls_back_to_the_start(feed):
 
 def test_handler_publishes_one_forecast_per_real_zone(stack, feed, monkeypatch):
     district_count = 6
-    body = json.dumps([{"hourly": hourly([0.5] * 48)} for _ in range(district_count)]).encode()
+    today = datetime.now(SLT).replace(hour=0, minute=0, second=0, microsecond=0)  # what the API returns right now
+    body = json.dumps([{"hourly": hourly([0.5] * 48, today)} for _ in range(district_count)]).encode()
 
     class Reply(io.BytesIO):
         def __enter__(self):
