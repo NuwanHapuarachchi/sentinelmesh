@@ -450,3 +450,33 @@ resource "aws_wafv2_web_acl_association" "api" {
   resource_arn = aws_api_gateway_stage.v1.arn
   web_acl_arn  = aws_wafv2_web_acl.api.arn
 }
+
+# WAF request logs (the name must start with aws-waf-logs-). Officer tokens, device tokens and the
+# delivery-report secret are redacted, so the logs hold no credentials.
+resource "aws_cloudwatch_log_group" "waf" {
+  name              = "aws-waf-logs-${var.prefix}-api"
+  retention_in_days = 14
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "api" {
+  resource_arn            = aws_wafv2_web_acl.api.arn
+  log_destination_configs = [aws_cloudwatch_log_group.waf.arn]
+
+  redacted_fields {
+    single_header {
+      name = "authorization"
+    }
+  }
+
+  redacted_fields {
+    single_header {
+      name = "x-device-token"
+    }
+  }
+
+  redacted_fields {
+    single_header {
+      name = "x-dlr-secret"
+    }
+  }
+}
