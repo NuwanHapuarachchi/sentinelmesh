@@ -18,6 +18,8 @@ label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
 select, button { font: inherit; padding: 10px; border-radius: 10px; border: 1.5px solid var(--ink); background: #fff; color: var(--ink); }
 button { background: var(--river); border-color: var(--river); color: #fff; font-weight: 700; cursor: pointer; }
 button.link { background: none; border: none; color: var(--river); text-decoration: underline; padding: 4px 0; }
+button.secondary { background: #fff; color: var(--river); }
+.msg.cb { border-left-color: var(--imminent); }
 :focus-visible { outline: 3px solid var(--river); outline-offset: 2px; }
 .fine { font-size: 13px; color: #4d6676; }
 #history { display: flex; flex-direction: column; gap: 8px; }

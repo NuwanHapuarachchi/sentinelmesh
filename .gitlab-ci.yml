@@ -149,6 +149,19 @@ unit-tests:
         coverage_format: cobertura
         path: coverage.xml
 
+# Web pages: syntax of every script, then the phone's delivery channels in a stub browser.
+web-tests:
+  image: node:22-alpine
+  stage: test
+  interruptible: true
+  rules:
+    - if: $ACTION == "destroy"
+      when: never
+    - when: on_success
+  script:
+    - for f in web/*.js; do node --check "$f"; done
+    - node --test tests/web/*.test.mjs
+
 # The IaC security scan only needs to run when code changes, not on apply/destroy runs.
 kics-iac-sast:
   rules:
