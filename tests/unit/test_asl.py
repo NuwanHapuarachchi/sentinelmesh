@@ -102,3 +102,23 @@ def test_gate_and_releases_clear_the_confirmation_marker(machine):
     for name in ("ReleaseGate", "ReleaseAfterFailure"):
         assert "alert_confirmed_at" in states[name]["Parameters"]["UpdateExpression"]
     assert states["RecordReject"]["Parameters"]["Payload"]["mode"] == "rejected"
+
+
+def test_issue_and_records_carry_execution_identity_for_idempotency(machine):
+    states = machine["States"]
+    for name in ("Issue", "RecordReject", "RecordSuperseded"):
+        payload = states[name]["Parameters"]["Payload"]
+        assert payload["execution.$"] == "$$.Execution.Name", name
+        assert payload["entered.$"] == "$$.State.EnteredTime", name
+
+
+def test_queue_failure_tells_officers_and_frees_the_gate(machine):
+    states = machine["States"]
+    [catch] = states["Enqueue"]["Catch"]
+    assert catch["ErrorEquals"] == ["States.ALL"] and catch["Next"] == "EnqueueFailed"
+    assert states["EnqueueFailed"]["Resource"] == "arn:aws:states:::sns:publish"
+    # Officer notifications must never stand between a failure and releasing the gate.
+    for name in ("IssueFailed", "EnqueueFailed"):
+        assert states[name]["Next"] == "ReleaseAfterFailure"
+        assert [c["Next"] for c in states[name]["Catch"]] == ["ReleaseAfterFailure"]
+    assert states["ReleaseAfterFailure"]["Next"] == "Failed"

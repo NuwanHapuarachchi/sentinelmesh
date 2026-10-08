@@ -1,5 +1,6 @@
 import json
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
 
 import pytest
 
@@ -98,3 +99,33 @@ def test_rejected_record_leaves_the_approval_alone(stack, issuer):
 def test_unknown_record_mode_is_an_error(stack, issuer):
     with pytest.raises(ValueError):
         record(issuer, "deleted")
+
+
+def test_issue_retries_produce_one_alert_one_cap_and_one_decision(stack, issuer):
+    event = {"op": "issue", "input": bypass_input("Z07"), "approval": {"decision": "auto"},
+             "execution": "Z07-imminent-e1-1791400000", "entered": "2026-10-08T06:30:00.250Z"}
+    first = issuer.handler(event, None)
+    second = issuer.handler(event, None)
+    assert first == second
+    assert len(stack.table("alerts").scan()["Items"]) == 1
+    assert len(stack.keys("WEB_BUCKET", "cap/")) == 1
+    assert len(stack.keys("DECISIONS_BUCKET", "decisions/")) == 1
+    assert first["alert_id"].startswith("SM-20261008-Z07-")
+    assert alert_item(stack, first["alert_id"])["issued_at"] == int(datetime(2026, 10, 8, 6, 30, tzinfo=UTC).timestamp())
+
+
+def test_different_executions_get_different_alerts(stack, issuer):
+    base = {"op": "issue", "input": bypass_input("Z07"), "approval": {"decision": "auto"}, "entered": "2026-10-08T06:30:00Z"}
+    a = issuer.handler({**base, "execution": "exec-a"}, None)["alert_id"]
+    b = issuer.handler({**base, "execution": "exec-b"}, None)["alert_id"]
+    assert a != b and len(stack.table("alerts").scan()["Items"]) == 2
+
+
+def test_record_retries_write_one_decision(stack, issuer):
+    stack.table("approvals").put_item(Item={"approval_id": "X1", "status": "PENDING", "pending": "PENDING", "created_at": 1})
+    inp = {**bypass_input("Z07"), "tier": "warning", "origin": "scorer"}
+    event = {"op": "record", "mode": "superseded", "input": inp, "execution": "Z07-warning-e1-1",
+             "entered": "2026-10-08T06:31:00Z", "approval": {"decision": "timeout", "approval_id": "X1"}}
+    issuer.handler(event, None)
+    issuer.handler(event, None)
+    assert stack.keys("DECISIONS_BUCKET", "decisions/") == ["decisions/2026/10/08/Z07/Z07-warning-e1-1-superseded.json"]

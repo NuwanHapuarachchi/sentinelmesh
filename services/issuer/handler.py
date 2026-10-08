@@ -43,12 +43,21 @@ def handler(event, context):
         if mode == "superseded":
             # An approved warning can still be superseded before it issues, so APPROVED moves too.
             settle_approval(approval.get("approval_id"), "SUPERSEDED", (*OPEN, "APPROVED"))
-        return record_decision(event["input"], mode=mode, approval=approval)
-    return issue(event["input"], event.get("approval") or {})
+        return record_decision(event["input"], mode=mode, approval=approval, execution=event.get("execution"),
+                               at=epoch(event.get("entered")))
+    return issue(event["input"], event.get("approval") or {}, event.get("execution"), event.get("entered"))
 
 
-def issue(inp, approval):
-    now = time.time()
+def epoch(iso_time):
+    """Step Functions context timestamps ('2026-10-08T06:30:00.123Z') to epoch seconds; None if absent."""
+    return datetime.fromisoformat(iso_time).timestamp() if iso_time else None
+
+
+def issue(inp, approval, execution=None, entered=None):
+    """Idempotent per workflow execution: the workflow retries this task, and every retry must produce the
+    same alert id, CAP file and decision record instead of a second alert. The id derives from the
+    execution name and the content time from when the Issue state was entered (constant across retries)."""
+    issued = epoch(entered) or time.time()
     zone = zones.get_item(Key={"zone_id": inp["zone_id"]})["Item"]
     zone["polygon"] = json.loads(zone["polygon"])
     tier, hazard = inp["tier"], inp.get("hazard", "flood")
@@ -56,36 +65,42 @@ def issue(inp, approval):
     # heartbeat or e2e alert must never go out as "Actual".
     is_test = bool(inp.get("is_test")) or bool(zone.get("is_test"))
     status = "Test" if is_test else ("Exercise" if inp.get("drill") else "Actual")
-    day = datetime.fromtimestamp(now, UTC).strftime("%Y%m%d")
-    alert_id = f"SM-{day}-{inp['zone_id']}-{uuid.uuid4().hex[:6].upper()}"
+    day = datetime.fromtimestamp(issued, UTC).strftime("%Y%m%d")
+    suffix = hashlib.sha256(execution.encode()).hexdigest()[:6] if execution else uuid.uuid4().hex[:6]
+    alert_id = f"SM-{day}-{inp['zone_id']}-{suffix.upper()}"
     mode = approval.get("decision") or ("auto" if tier != "warning" else "timeout")
+    trigger_rx_ms = int(inp.get("trigger_rx_ms") or issued * 1000)
 
-    xml = cap.build(alert_id, zone, tier, hazard, now, status=status)
+    xml = cap.build(alert_id, zone, tier, hazard, issued, status=status)
     cap_key = f"cap/{day}/{alert_id}.xml"
     s3.put_object(Bucket=os.environ["WEB_BUCKET"], Key=cap_key, Body=xml.encode("utf-8"),
                   ContentType="application/cap+xml", CacheControl="public, max-age=31536000, immutable")
     cap_sha = hashlib.sha256(xml.encode("utf-8")).hexdigest()
 
     texts = messages.render_all(tier, hazard, inp["zone_id"], alert_id[-6:])
-    alerts.put_item(Item={
-        "alert_id": alert_id, "sk": "META", "day": day, "issued_at": int(now),
-        "zone_id": inp["zone_id"], "zone_name": zone["name"], "district": zone["district"],
-        "tier": tier, "hazard": hazard, "status": status, "mode": mode, "cell": os.environ["CELL"],
-        "score": Decimal(str(inp.get("score", 0))), "reason": inp.get("reason", ""),
-        "trigger_rx_ms": int(inp.get("trigger_rx_ms") or now * 1000), "cap_key": cap_key,
-        "texts": texts, "origin": inp.get("origin", "scorer"), "sent": 0, "delivered": 0,
-    })
+    try:
+        alerts.put_item(Item={
+            "alert_id": alert_id, "sk": "META", "day": day, "issued_at": int(issued),
+            "zone_id": inp["zone_id"], "zone_name": zone["name"], "district": zone["district"],
+            "tier": tier, "hazard": hazard, "status": status, "mode": mode, "cell": os.environ["CELL"],
+            "score": Decimal(str(inp.get("score", 0))), "reason": inp.get("reason", ""),
+            "trigger_rx_ms": trigger_rx_ms, "cap_key": cap_key,
+            "texts": texts, "origin": inp.get("origin", "scorer"), "sent": 0, "delivered": 0,
+        }, ConditionExpression="attribute_not_exists(alert_id)")
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        log("alert_retry", alert_id=alert_id)  # a retry of this execution; the record already exists
     if tier == "warning" and mode == "timeout":
         settle_approval(approval.get("approval_id") or inp.get("approval_id"), "AUTO_ISSUED", OPEN)
-    record_decision(inp, mode=mode, approval=approval, alert_id=alert_id, cap_sha=cap_sha)
+    record_decision(inp, mode=mode, approval=approval, alert_id=alert_id, cap_sha=cap_sha, execution=execution, at=issued)
 
-    lag_ms = now * 1000 - int(inp.get("trigger_rx_ms") or now * 1000)
+    lag_ms = time.time() * 1000 - trigger_rx_ms
     metric("DecisionLatencyMs", lag_ms, "Milliseconds", Tier=tier, Mode=mode)
     log("alert_issued", alert_id=alert_id, zone_id=inp["zone_id"], tier=tier, mode=mode, status=status)
 
     message = {"type": "alert", "alert_id": alert_id, "zone_id": inp["zone_id"], "tier": tier,
-               "hazard": hazard, "texts": texts, "status": status,
-               "trigger_rx_ms": int(inp.get("trigger_rx_ms") or now * 1000)}
+               "hazard": hazard, "texts": texts, "status": status, "trigger_rx_ms": trigger_rx_ms}
     summary = (f"{status} {tier.upper()} {hazard} alert {alert_id} issued for {zone['name']} "
                f"({zone['district']}). Mode: {mode}. Score {inp.get('score')}. Reason: {inp.get('reason')}.")
     return {"alert_id": alert_id, "queue_url": QUEUES[tier], "message": json.dumps(message, ensure_ascii=False),
@@ -110,19 +125,29 @@ def settle_approval(approval_id, status, from_statuses):
             raise
 
 
-def record_decision(inp, mode, approval=None, alert_id=None, cap_sha=None):
-    now = time.time()
-    day = datetime.fromtimestamp(now, UTC).strftime("%Y/%m/%d")
-    key = f"decisions/{day}/{inp['zone_id']}/{int(now * 1000)}-{mode}-{uuid.uuid4().hex[:6]}.json"
+def record_decision(inp, mode, approval=None, alert_id=None, cap_sha=None, execution=None, at=None):
+    """Write-once decision record. The key is deterministic per alert (or per execution for a warning that was
+    not issued) and `at` is the workflow state's entry time, so a retried task finds the record already there
+    instead of writing a second one."""
+    at = at or time.time()
+    day = datetime.fromtimestamp(at, UTC).strftime("%Y/%m/%d")
+    name = alert_id or execution or f"{int(at * 1000)}-{uuid.uuid4().hex[:6]}"
+    key = f"decisions/{day}/{inp['zone_id']}/{name}-{mode}.json"
     body = {
-        "recorded_at": datetime.fromtimestamp(now, UTC).isoformat(), "mode": mode, "alert_id": alert_id,
+        "recorded_at": datetime.fromtimestamp(at, UTC).isoformat(), "mode": mode, "alert_id": alert_id,
         "zone_id": inp["zone_id"], "tier": inp["tier"], "hazard": inp.get("hazard"), "score": inp.get("score"),
         "reason": inp.get("reason"), "contributions": inp.get("contributions"), "agreeing": inp.get("agreeing"),
         "evidence": inp.get("evidence"), "origin": inp.get("origin"), "cell": os.environ["CELL"],
         "approved_by": (approval or {}).get("decided_by"), "approval_note": (approval or {}).get("note"),
         "cap_sha256": cap_sha, "rules_version": os.environ.get("RULES_VERSION", "dev"),
     }
-    s3.put_object(Bucket=os.environ["DECISIONS_BUCKET"], Key=key, IfNoneMatch="*",
-                  Body=json.dumps(body, default=str, ensure_ascii=False).encode("utf-8"),
-                  ContentType="application/json", ChecksumAlgorithm="SHA256")
+    try:
+        s3.put_object(Bucket=os.environ["DECISIONS_BUCKET"], Key=key, IfNoneMatch="*",
+                      Body=json.dumps(body, default=str, ensure_ascii=False).encode("utf-8"),
+                      ContentType="application/json", ChecksumAlgorithm="SHA256")
+    except ClientError as exc:
+        # 412: a previous attempt already wrote this record; 409: a concurrent attempt is writing it.
+        if exc.response["Error"]["Code"] not in ("PreconditionFailed", "ConditionalRequestConflict"):
+            raise
+        log("decision_exists", key=key)
     return {"decision_key": key}

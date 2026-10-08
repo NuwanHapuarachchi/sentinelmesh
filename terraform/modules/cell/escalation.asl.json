@@ -113,7 +113,14 @@
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${issuer_fn_arn}",
-        "Payload": { "op": "record", "mode": "superseded", "execution.$": "$$.Execution.Name", "input.$": "$", "approval.$": "$.approval" }
+        "Payload": {
+          "op": "record",
+          "mode": "superseded",
+          "execution.$": "$$.Execution.Name",
+          "entered.$": "$$.State.EnteredTime",
+          "input.$": "$",
+          "approval.$": "$.approval"
+        }
       },
       "ResultPath": null,
       "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "BackoffRate": 2, "MaxAttempts": 3 }],
@@ -126,7 +133,14 @@
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${issuer_fn_arn}",
-        "Payload": { "op": "record", "mode": "rejected", "execution.$": "$$.Execution.Name", "input.$": "$", "approval.$": "$.approval" }
+        "Payload": {
+          "op": "record",
+          "mode": "rejected",
+          "execution.$": "$$.Execution.Name",
+          "entered.$": "$$.State.EnteredTime",
+          "input.$": "$",
+          "approval.$": "$.approval"
+        }
       },
       "ResultPath": null,
       "Next": "ReleaseGate"
@@ -148,7 +162,13 @@
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${issuer_fn_arn}",
-        "Payload": { "op": "issue", "input.$": "$", "approval.$": "$.approval" }
+        "Payload": {
+          "op": "issue",
+          "execution.$": "$$.Execution.Name",
+          "entered.$": "$$.State.EnteredTime",
+          "input.$": "$",
+          "approval.$": "$.approval"
+        }
       },
       "ResultSelector": {
         "alert_id.$": "$.Payload.alert_id",
@@ -178,6 +198,7 @@
       },
       "ResultPath": null,
       "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "BackoffRate": 2, "MaxAttempts": 4 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.enqueue_error", "Next": "EnqueueFailed" }],
       "Next": "IsTestAlert"
     },
     "IsTestAlert": {
@@ -207,6 +228,20 @@
         "Message.$": "States.Format('Issuing {} for zone {} failed. Issue it manually now.', $.tier, $.zone_id)"
       },
       "ResultPath": null,
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": null, "Next": "ReleaseAfterFailure" }],
+      "Next": "ReleaseAfterFailure"
+    },
+    "EnqueueFailed": {
+      "Comment": "The alert record and CAP file exist but nothing was queued for delivery: tell officers, then free the gate so the next trigger can retry.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${officers_topic_arn}",
+        "Subject": "SentinelMesh: ALERT NOT DELIVERED - send manually",
+        "Message.$": "States.Format('Alert {} ({} for zone {}) was issued but could not be queued for delivery. Send it manually now.', $.issue.alert_id, $.tier, $.zone_id)"
+      },
+      "ResultPath": null,
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": null, "Next": "ReleaseAfterFailure" }],
       "Next": "ReleaseAfterFailure"
     },
     "ReleaseAfterFailure": {
