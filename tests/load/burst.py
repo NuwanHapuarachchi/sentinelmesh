@@ -3,11 +3,14 @@
 IoT Core allows ~100 publishes/s per connection, so one CI runner can't drive the scenario's
 4,000 readings/s through MQTT. Instead this writes synthetic gauge readings straight into both
 cells' observation tables (exactly what the IoT rules do), using hidden load zones L01-L80,
-then reports how far behind the scorers fell.
+then reports how far behind the scorers fell. It fails if the worst minute's p99 scoring latency
+is above MAX_P99_MS (default 10 s) or no latency was recorded, and finally deletes the load
+zones' state so they don't sit "blind" and get re-scored every minute afterwards.
 
     python tests/load/burst.py [rate_per_s] [seconds]
 """
 
+import os
 import sys
 import time
 import uuid
@@ -20,6 +23,7 @@ import boto3
 REGION = "ap-southeast-2"
 RATE = int(sys.argv[1]) if len(sys.argv) > 1 else 2000
 SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+MAX_P99_MS = float(os.environ.get("MAX_P99_MS", "10000"))
 ZONES = [f"L{i:02d}" for i in range(1, 81)]
 
 ddb = boto3.resource("dynamodb", region_name=REGION)
@@ -61,6 +65,7 @@ def main():
     time.sleep(90)  # let metrics land
     end = datetime.now(UTC) + timedelta(minutes=1)
     print(f"\nwrote {written} readings over {SECONDS}s (target {RATE}/s)")
+    ok = True
     for cell in ("a", "b"):
         stats = cw.get_metric_statistics(
             Namespace="SentinelMesh", MetricName="ScoreLatencyMs", Dimensions=[{"Name": "Cell", "Value": cell}],
@@ -68,11 +73,30 @@ def main():
         )["Datapoints"]
         worst = max(stats, key=lambda d: d["ExtendedStatistics"]["p99"], default=None)
         if worst:
+            p99 = worst["ExtendedStatistics"]["p99"]
             print(f"cell {cell}: scoring latency p50 {worst['ExtendedStatistics']['p50']:.0f} ms, "
-                  f"p99 {worst['ExtendedStatistics']['p99']:.0f} ms (worst minute)")
+                  f"p99 {p99:.0f} ms (worst minute, limit {MAX_P99_MS:.0f} ms)")
+            ok = ok and p99 <= MAX_P99_MS
         else:
-            print(f"cell {cell}: no latency datapoints yet")
+            print(f"cell {cell}: no latency datapoints")
+            ok = False
+
+    clean_up()
+    print("PASS" if ok else "FAIL")
+    return 0 if ok else 1
+
+
+def clean_up():
+    """Delete the load zones' state. Twice, a minute apart, in case the scorers were still draining."""
+    state = ddb.Table("sentinelmesh-zone-state")
+    for attempt in range(2):
+        with state.batch_writer() as batch:
+            for zone in ZONES:
+                batch.delete_item(Key={"zone_id": zone})
+        if attempt == 0:
+            time.sleep(60)
+    print(f"cleared state for {len(ZONES)} load zones")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

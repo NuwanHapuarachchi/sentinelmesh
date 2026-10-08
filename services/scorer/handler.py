@@ -56,14 +56,25 @@ def handler(event, context):
 
 
 def watchdog(now):
-    """Re-score this cell's zones with no new data so decay, de-escalation and silence detection still run."""
-    zones = zones_table.scan(FilterExpression="owner_cell = :c", ExpressionAttributeValues={":c": CELL})["Items"]
-    blind = 0
+    """Re-score this cell's zones with no new data so decay, de-escalation and silence detection still run.
+    BlindZones counts real zones only: hidden test, heartbeat and load zones go quiet by design."""
+    zones, kwargs = [], {"FilterExpression": "owner_cell = :c", "ExpressionAttributeValues": {":c": CELL}}
+    while True:
+        page = zones_table.scan(**kwargs)
+        zones += page["Items"]
+        if "LastEvaluatedKey" not in page:
+            break
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    blind = test_blind = 0
     for zone in zones:
         state = score_zone(zone["zone_id"], [], now, zone=zone, only_if_known=True)
-        blind += bool(state and state.get("blind"))
+        is_blind = bool(state and state.get("blind"))
+        if zone.get("is_test"):
+            test_blind += is_blind
+        else:
+            blind += is_blind
     metric("BlindZones", blind, Cell=CELL)
-    return {"zones": len(zones), "blind": blind}
+    return {"zones": len(zones), "blind": blind, "blind_test_zones": test_blind}
 
 
 def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
