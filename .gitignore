@@ -20,3 +20,6 @@ terraform.rc
 
 # Lambda bundle built by Terraform
 terraform/app/build/
+
+# Edge programs' local state: buffered readings, fetched device certificates and keys
+edge/state/
