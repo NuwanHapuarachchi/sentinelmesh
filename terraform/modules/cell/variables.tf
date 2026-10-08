@@ -69,6 +69,11 @@ variable "public_feed" {
   type        = object({ name = string, arn = string })
 }
 
+variable "iot_endpoint" {
+  description = "IoT data endpoint; the issuer tells district nodes about alerts on sm/alerts/<district>."
+  type        = string
+}
+
 variable "log_retention_days" {
   description = "Retention for the cell's own log groups (IoT rule errors, workflow)."
   type        = number

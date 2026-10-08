@@ -63,4 +63,5 @@ module "cell" {
 
   evidence_bucket = { name = module.shared.buckets.evidence, arn = module.shared.bucket_arns.evidence }
   public_feed     = { name = module.public_feed.name, arn = module.public_feed.arn }
+  iot_endpoint    = data.aws_iot_endpoint.data.endpoint_address
 }

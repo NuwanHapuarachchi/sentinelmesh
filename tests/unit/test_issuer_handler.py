@@ -168,3 +168,21 @@ def test_an_exercises_all_clear_is_an_exercise_for_the_same_hazard(stack, issuer
     out = issuer.handler({"op": "issue", "input": inp, "approval": {"decision": "approve"}, "execution": "c1"}, None)
     item = alert_item(stack, out["alert_id"])
     assert (item["status"], item["hazard"]) == ("Exercise", "landslide")
+
+
+class FakeIot:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, topic, qos, payload):
+        self.published.append((topic, json.loads(payload)))
+
+
+def test_the_district_node_hears_about_each_real_alert(stack, issuer):
+    issuer.iot = FakeIot()
+    out = issue(issuer, bypass_input("Z07"))
+    [(topic, msg)] = issuer.iot.published
+    assert topic == "sm/alerts/ratnapura"
+    assert msg["alert_id"] == out["alert_id"] and msg["zone_id"] == "Z07" and msg["tier"] == "imminent"
+    issue(issuer, bypass_input("H00"))  # test zones tell no node
+    assert len(issuer.iot.published) == 1

@@ -93,7 +93,7 @@ resource "aws_iam_role_policy" "ops_scheduler" {
     Statement = [{
       Effect   = "Allow"
       Action   = "lambda:InvokeFunction"
-      Resource = [module.heartbeat.arn, module.forecast_feed.arn, module.reach_monitor.arn, module.public_feed.arn]
+      Resource = [module.heartbeat.arn, module.forecast_feed.arn, module.reach_monitor.arn, module.public_feed.arn, module.edge_bundle.arn]
     }]
   })
 }

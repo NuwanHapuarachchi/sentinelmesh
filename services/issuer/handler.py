@@ -12,7 +12,8 @@ op=record -> decision record only, for a warning or all-clear that was not issue
 Decision records are write-once (the bucket policy rejects any PutObject without If-None-Match) and each is
 linked into a hash chain (common/chain.py), so an edited or deleted record shows up in verification.
 Environment: ALERTS_TABLE, APPROVALS_TABLE, ZONES_TABLE, STATE_TABLE, WEB_BUCKET, DECISIONS_BUCKET, CELL,
-QUEUE_IMMINENT, QUEUE_WARNING, QUEUE_ADVISORY, RULES_VERSION, META_TABLE (chain head), PUBLIC_FEED_FUNCTION (optional).
+QUEUE_IMMINENT, QUEUE_WARNING, QUEUE_ADVISORY, RULES_VERSION, META_TABLE (chain head), PUBLIC_FEED_FUNCTION and
+IOT_ENDPOINT (optional: tells the district's Local Alert Node about each alert on sm/alerts/<district>).
 """
 
 import hashlib
@@ -27,11 +28,13 @@ import boto3
 from botocore.exceptions import ClientError
 
 from common import cap, chain, messages
+from common.districts import slug
 from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
 lam = boto3.client("lambda")
+iot = boto3.client("iot-data", endpoint_url=f"https://{os.environ['IOT_ENDPOINT']}") if os.environ.get("IOT_ENDPOINT") else None
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 approvals = ddb.Table(os.environ["APPROVALS_TABLE"])
 zones = ddb.Table(os.environ["ZONES_TABLE"])
@@ -120,6 +123,7 @@ def issue(inp, approval, execution=None, entered=None):
 
     if not is_test:
         refresh_public_feed()
+        tell_district_node(zone["district"], alert_id, inp["zone_id"], tier, status, issued)
 
     lag_ms = time.time() * 1000 - trigger_rx_ms
     metric("DecisionLatencyMs", lag_ms, "Milliseconds", Tier=tier, Mode=mode)
@@ -131,6 +135,18 @@ def issue(inp, approval, execution=None, entered=None):
                f"({zone['district']}). Mode: {mode}. Score {inp.get('score')}. Reason: {inp.get('reason')}.")
     return {"alert_id": alert_id, "queue_url": QUEUES[tier], "message": json.dumps(message, ensure_ascii=False),
             "summary": summary, "is_test": is_test}
+
+
+def tell_district_node(district, alert_id, zone_id, tier, status, issued):
+    """Let the district's Local Alert Node know the cloud has issued this alert, so it doesn't issue its own
+    (best effort: a node that hears nothing waits its grace period, then issues anyway)."""
+    if iot is None:
+        return
+    try:
+        iot.publish(topic=f"sm/alerts/{slug(district)}", qos=1, payload=json.dumps(
+            {"alert_id": alert_id, "zone_id": zone_id, "tier": tier, "status": status, "issued_at": int(issued)}))
+    except ClientError as exc:
+        log("district_node_notify_failed", district=district, error=str(exc))
 
 
 def refresh_public_feed():

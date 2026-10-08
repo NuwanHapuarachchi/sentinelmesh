@@ -62,6 +62,7 @@ module "issuer" {
     RULES_VERSION        = var.rules_version
     PUBLIC_FEED_FUNCTION = var.public_feed.name
     META_TABLE           = var.delivery.meta.name
+    IOT_ENDPOINT         = var.iot_endpoint
   }
 
   policy_statements = [
@@ -73,6 +74,7 @@ module "issuer" {
     { Effect = "Allow", Action = "s3:GetObject", Resource = "${var.delivery.decisions_bucket.arn}/decisions/chain/*" },
     { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = var.delivery.meta.arn },
     { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = var.public_feed.arn },
+    { Effect = "Allow", Action = "iot:Publish", Resource = "arn:aws:iot:${local.region}:${local.account_id}:topic/sm/alerts/*" },
   ]
 }
 

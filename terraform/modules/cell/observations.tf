@@ -2,6 +2,9 @@ locals {
   name = "${var.prefix}-${var.cell}"
   # IoT rule names allow only letters, digits and underscores.
   rule_prefix = replace(local.name, "-", "_")
+  # Region and account, read from an ARN the module is given (arn:aws:dynamodb:<region>:<account>:table/...).
+  region     = split(":", var.zones_table.arn)[3]
+  account_id = split(":", var.zones_table.arn)[4]
 }
 
 # The cell's observation bus. Production uses Kinesis; this account blocks it, so the prototype
