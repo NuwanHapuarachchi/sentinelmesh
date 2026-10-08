@@ -17,3 +17,12 @@ output "state_machine_arn" {
 output "queues" {
   value = { for t, q in aws_sqs_queue.tier : t => q.url }
 }
+
+output "dead_letter_queues" {
+  description = "Queue names by kind; anything in them means work the cell could not finish."
+  value = {
+    dispatch = aws_sqs_queue.dispatch_dlq.name
+    stream   = aws_sqs_queue.stream_dlq.name
+    archive  = aws_sqs_queue.archive_dlq.name
+  }
+}

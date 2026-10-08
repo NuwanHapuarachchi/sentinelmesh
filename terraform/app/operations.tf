@@ -109,13 +109,24 @@ resource "aws_cloudwatch_metric_alarm" "heartbeat" {
   alarm_actions       = [aws_sns_topic.officers.arn]
 }
 
+locals {
+  dlq_meaning = {
+    dispatch = "Alerts failed to dispatch; people may be uncovered."
+    stream   = "Observations failed scoring after retries; zones may be mis-scored."
+    archive  = "Observations failed to reach the evidence lake; post-event replay will have a gap."
+  }
+  dead_letter_queues = merge([for c, m in module.cell : {
+    for kind, queue in m.dead_letter_queues : "${c}-${kind}" => { cell = c, kind = kind, queue = queue }
+  }]...)
+}
+
 resource "aws_cloudwatch_metric_alarm" "dlq" {
-  for_each            = { for c, m in module.cell : c => m }
-  alarm_name          = "${var.prefix}-${each.key}-dispatch-dlq"
-  alarm_description   = "Alerts failed to dispatch in cell ${each.key}; people may be uncovered."
+  for_each            = local.dead_letter_queues
+  alarm_name          = "${var.prefix}-${each.key}-dlq"
+  alarm_description   = "Cell ${each.value.cell}: ${local.dlq_meaning[each.value.kind]}"
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateNumberOfMessagesVisible"
-  dimensions          = { QueueName = "${var.prefix}-${each.key}-dispatch-dlq" }
+  dimensions          = { QueueName = each.value.queue }
   statistic           = "Maximum"
   period              = 60
   evaluation_periods  = 1
@@ -123,6 +134,17 @@ resource "aws_cloudwatch_metric_alarm" "dlq" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.officers.arn]
+}
+
+# The dispatch alarms used to be keyed by cell alone; keep them (same names) instead of recreating them.
+moved {
+  from = aws_cloudwatch_metric_alarm.dlq["a"]
+  to   = aws_cloudwatch_metric_alarm.dlq["a-dispatch"]
+}
+
+moved {
+  from = aws_cloudwatch_metric_alarm.dlq["b"]
+  to   = aws_cloudwatch_metric_alarm.dlq["b-dispatch"]
 }
 
 resource "aws_cloudwatch_metric_alarm" "ttfa" {
