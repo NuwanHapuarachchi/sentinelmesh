@@ -7,7 +7,8 @@ create entry n, so concurrent issuers in different cells still produce one order
 entries themselves.
 
 verify() walks the chain and reports gaps, edited or deleted records, broken links, and records that never
-made it into the chain. Editing or deleting any record, or any entry, is therefore visible.
+made it into the chain. Editing or deleting any record, or any entry, is therefore visible. Records S3 stored
+before the first chain entry (LastModified, which S3 sets) predate chaining and are counted as legacy.
 """
 
 import hashlib
@@ -76,21 +77,23 @@ def append(s3, bucket, meta, record_key, record_raw, at=None, head=HEAD, prefix=
     raise RuntimeError(f"could not append {record_key} to the decision chain")
 
 
-def _keys(s3, bucket, prefix):
-    keys, kwargs = [], {"Bucket": bucket, "Prefix": prefix}
+def _objects(s3, bucket, prefix):
+    """{key: LastModified} under prefix."""
+    found, kwargs = {}, {"Bucket": bucket, "Prefix": prefix}
     while True:
         page = s3.list_objects_v2(**kwargs)
-        keys += [o["Key"] for o in page.get("Contents", [])]
+        found |= {o["Key"]: o["LastModified"] for o in page.get("Contents", [])}
         if not page.get("IsTruncated"):
-            return keys
+            return found
         kwargs["ContinuationToken"] = page["NextContinuationToken"]
 
 
 def verify(s3, bucket, records_prefix="decisions/", prefix=CHAIN_PREFIX):
-    """Walk the whole chain. Returns {"entries", "records", "ok", "problems": [...]}."""
+    """Walk the whole chain. Returns {"entries", "records", "legacy", "ok", "problems": [...]}."""
     problems, linked = [], set()
     prev, expected = GENESIS, 1
-    entries = sorted(_keys(s3, bucket, prefix))
+    chained = _objects(s3, bucket, prefix)
+    entries = sorted(chained)
     for key in entries:
         raw = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         try:
@@ -113,6 +116,9 @@ def verify(s3, bucket, records_prefix="decisions/", prefix=CHAIN_PREFIX):
                 raise
             problems.append(f"{entry['record_key']}: deleted (entry {entry.get('seq')})")
         prev, expected = digest(raw), expected + 1
-    records = [k for k in _keys(s3, bucket, records_prefix) if not k.startswith(prefix)]
-    problems += [f"{k}: not in the chain" for k in records if k not in linked]
-    return {"entries": len(entries), "records": len(records), "ok": not problems, "problems": problems}
+    records = {k: t for k, t in _objects(s3, bucket, records_prefix).items() if not k.startswith(prefix)}
+    chain_start = min(chained.values()) if chained else None
+    legacy = {k for k, t in records.items() if k not in linked and (chain_start is None or t < chain_start)}
+    problems += [f"{k}: not in the chain" for k in sorted(records) if k not in linked and k not in legacy]
+    return {"entries": len(entries), "records": len(records) - len(legacy), "legacy": len(legacy),
+            "ok": not problems, "problems": problems}

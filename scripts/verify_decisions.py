@@ -23,7 +23,8 @@ def main(argv=None):
     session = boto3.session.Session(region_name=REGION)
     bucket = args.bucket or f"sentinelmesh-decisions-{session.client('sts').get_caller_identity()['Account']}"
     report = chain.verify(session.client("s3"), bucket)
-    print(f"{bucket}: {report['entries']} chain entries, {report['records']} records")
+    print(f"{bucket}: {report['entries']} chain entries, {report['records']} chained records, "
+          f"{report['legacy']} legacy records (written before chaining)")
     for problem in report["problems"]:
         print(f"  PROBLEM {problem}")
     print("chain intact" if report["ok"] else "CHAIN BROKEN")

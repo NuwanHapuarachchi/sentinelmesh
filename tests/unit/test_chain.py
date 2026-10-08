@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 
 import pytest
 
@@ -33,7 +34,7 @@ def test_records_form_one_linked_chain(stack, env):
     first = json.loads(stack.body("DECISIONS_BUCKET", chain.entry_key(1)))
     second = json.loads(stack.body("DECISIONS_BUCKET", chain.entry_key(2)))
     assert first["prev_sha256"] == chain.GENESIS and second["prev_sha256"] == entries[0]["sha256"]
-    assert chain.verify(stack.s3, BUCKET) == {"entries": 3, "records": 3, "ok": True, "problems": []}
+    assert chain.verify(stack.s3, BUCKET) == {"entries": 3, "records": 3, "legacy": 0, "ok": True, "problems": []}
 
 
 def test_a_lost_head_hint_is_repaired_from_the_entries(stack, env):
@@ -79,7 +80,7 @@ def test_the_issuer_chains_each_decision_once_even_when_retried(stack):
     issuer.handler(event, None)
     issuer.handler(event, None)
     issuer.handler({**event, "execution": "exec-2"}, None)
-    assert chain.verify(stack.s3, BUCKET) == {"entries": 2, "records": 2, "ok": True, "problems": []}
+    assert chain.verify(stack.s3, BUCKET) == {"entries": 2, "records": 2, "legacy": 0, "ok": True, "problems": []}
 
 
 def test_verify_script_exit_code(stack, env, monkeypatch, capsys):
@@ -89,3 +90,25 @@ def test_verify_script_exit_code(stack, env, monkeypatch, capsys):
     stack.s3.delete_object(Bucket=BUCKET, Key="decisions/2026/10/09/Z07/r0.json")
     assert verify_decisions.main(["--bucket", BUCKET]) == 1
     assert "CHAIN BROKEN" in capsys.readouterr().out
+
+
+def test_records_from_before_chaining_are_legacy_not_a_break(stack, env, monkeypatch):
+    old_key = "decisions/2026/10/01/Z07/old.json"
+    record(stack, old_key, {"old": True})
+    assert chain.verify(stack.s3, BUCKET) == {"entries": 0, "records": 0, "legacy": 1, "ok": True, "problems": []}
+    write_and_chain(stack, env, 1)
+    # S3 timestamps (moto's at least) have one-second resolution: place the old record clearly before the chain.
+    real = chain._objects
+    monkeypatch.setattr(chain, "_objects", lambda s3, bucket, prefix: {
+        k: (v - timedelta(minutes=10) if k == old_key else v) for k, v in real(s3, bucket, prefix).items()})
+    assert chain.verify(stack.s3, BUCKET) == {"entries": 1, "records": 1, "legacy": 1, "ok": True, "problems": []}
+
+
+def test_an_unchained_record_written_after_chaining_began_is_not_legacy(stack, env, monkeypatch):
+    write_and_chain(stack, env, 1)
+    late_key = "decisions/2026/10/09/Z07/late.json"
+    record(stack, late_key, {"late": True})
+    real = chain._objects
+    monkeypatch.setattr(chain, "_objects", lambda s3, bucket, prefix: {
+        k: (v + timedelta(minutes=10) if k == late_key else v) for k, v in real(s3, bucket, prefix).items()})
+    assert chain.verify(stack.s3, BUCKET)["problems"] == [f"{late_key}: not in the chain"]
