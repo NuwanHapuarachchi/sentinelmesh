@@ -98,3 +98,28 @@ def test_blind_zones_metric_counts_real_zones_only(stack, scorer):
     out = scorer.handler({"mode": "watchdog"}, None)
     assert out["blind"] == 1 and out["blind_test_zones"] == 3
     assert ("BlindZones", 1, {"Cell": "a"}) in scorer.metrics
+
+
+class FakeLambda:
+    def __init__(self):
+        self.invoked = []
+
+    def invoke(self, FunctionName, InvocationType, Payload):
+        self.invoked.append((FunctionName, InvocationType))
+
+
+def test_a_tier_change_refreshes_the_public_map_once_per_batch(stack, scorer):
+    scorer.lam, scorer.PUBLIC_FEED_FUNCTION = FakeLambda(), "t-public-feed"
+    level = gauge_level(stack, "Z07", 0.8)
+    scorer.handler({"Records": [record("Z07", 1, source_class="gauge", level_m=level),
+                                record("Z08", 2, source_class="gauge", level_m=gauge_level(stack, "Z08", 0.8))]}, None)
+    assert scorer.lam.invoked == [("t-public-feed", "Event")]
+    scorer.handler({"Records": [record("Z07", 3, source_class="gauge", level_m=level)]}, None)  # still watch
+    assert len(scorer.lam.invoked) == 1
+
+
+def test_test_zone_changes_do_not_refresh_the_public_map(stack, scorer):
+    scorer.lam, scorer.PUBLIC_FEED_FUNCTION = FakeLambda(), "t-public-feed"
+    scorer.handler({"Records": [record("T01", 1, source_class="gauge", level_m=gauge_level(stack, "T01", 0.8))]}, None)
+    assert state(stack, "T01")["tier"] == "watch"
+    assert scorer.lam.invoked == []

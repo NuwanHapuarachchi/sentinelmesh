@@ -62,4 +62,5 @@ module "cell" {
   rules_version = var.rules_version
 
   evidence_bucket = { name = module.shared.buckets.evidence, arn = module.shared.bucket_arns.evidence }
+  public_feed     = { name = module.public_feed.name, arn = module.public_feed.arn }
 }

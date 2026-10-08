@@ -15,10 +15,11 @@ module "scorer" {
   timeout      = 60
 
   environment = {
-    CELL              = var.cell
-    ZONES_TABLE       = var.zones_table.name
-    STATE_TABLE       = var.state_table.name
-    STATE_MACHINE_ARN = aws_sfn_state_machine.escalation.arn
+    CELL                 = var.cell
+    ZONES_TABLE          = var.zones_table.name
+    STATE_TABLE          = var.state_table.name
+    STATE_MACHINE_ARN    = aws_sfn_state_machine.escalation.arn
+    PUBLIC_FEED_FUNCTION = var.public_feed.name
   }
 
   policy_statements = [
@@ -31,6 +32,7 @@ module "scorer" {
     },
     { Effect = "Allow", Action = "sqs:SendMessage", Resource = aws_sqs_queue.stream_dlq.arn },
     { Effect = "Allow", Action = "states:StartExecution", Resource = aws_sfn_state_machine.escalation.arn },
+    { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = var.public_feed.arn },
   ]
 }
 

@@ -8,6 +8,39 @@ resource "aws_cloudfront_origin_access_control" "web" {
   signing_protocol                  = "sigv4"
 }
 
+# The public map file (public/zones.json): rebuilt every minute and whenever a scorer sees a tier change.
+module "public_feed" {
+  source       = "../modules/lambda_fn"
+  name         = "${var.prefix}-public-feed"
+  handler      = "public_feed.handler.handler"
+  zip_path     = local.fn_common.zip_path
+  zip_hash     = local.fn_common.zip_hash
+  boundary_arn = local.fn_common.boundary_arn
+  role_path    = local.fn_common.role_path
+
+  environment = {
+    STATE_TABLE = local.t.zone_state
+    WEB_BUCKET  = module.shared.buckets.web
+  }
+
+  policy_statements = [
+    { Effect = "Allow", Action = "dynamodb:Scan", Resource = local.a.zone_state },
+    { Effect = "Allow", Action = "s3:PutObject", Resource = "${module.shared.bucket_arns.web}/public/*" },
+  ]
+}
+
+resource "aws_scheduler_schedule" "public_feed" {
+  name                = "${var.prefix}-public-feed"
+  schedule_expression = "rate(1 minute)"
+  flexible_time_window {
+    mode = "OFF"
+  }
+  target {
+    arn      = module.public_feed.arn
+    role_arn = aws_iam_role.ops_scheduler.arn
+  }
+}
+
 # Security headers on every response. The CSP allows exactly what the pages load: scripts from the site
 # and cdnjs (Leaflet), styles also from Google Fonts (inline styles are allowed for the evidence bars),
 # fonts from Google, map tiles from Esri, and calls to this stack's API and Cognito domain.
@@ -88,6 +121,19 @@ resource "aws_cloudfront_distribution" "web" {
     cached_methods             = ["GET", "HEAD"]
     compress                   = true
     cache_policy_id            = "658327ea-f89d-4fab-a63d-7e88639e58f6" # Managed-CachingOptimized
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.web.id
+  }
+
+  # The public map file: cached at the edge for the 5 s its Cache-Control allows, so any number of
+  # viewers costs one origin read per edge every 5 s, and it keeps serving if the API is down.
+  ordered_cache_behavior {
+    path_pattern               = "public/*"
+    target_origin_id           = "web"
+    viewer_protocol_policy     = "redirect-to-https"
+    allowed_methods            = ["GET", "HEAD"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = "658327ea-f89d-4fab-a63d-7e88639e58f6" # Managed-CachingOptimized (honours max-age=5)
     response_headers_policy_id = aws_cloudfront_response_headers_policy.web.id
   }
 

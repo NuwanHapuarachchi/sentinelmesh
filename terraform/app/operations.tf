@@ -90,7 +90,11 @@ resource "aws_iam_role_policy" "ops_scheduler" {
   role = aws_iam_role.ops_scheduler.id
   policy = jsonencode({
     Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = [module.heartbeat.arn, module.forecast_feed.arn, module.reach_monitor.arn] }]
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "lambda:InvokeFunction"
+      Resource = [module.heartbeat.arn, module.forecast_feed.arn, module.reach_monitor.arn, module.public_feed.arn]
+    }]
   })
 }
 

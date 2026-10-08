@@ -63,6 +63,11 @@ variable "evidence_bucket" {
   type = object({ name = string, arn = string })
 }
 
+variable "public_feed" {
+  description = "Function that rebuilds the public map file; the scorer invokes it when a tier changes."
+  type        = object({ name = string, arn = string })
+}
+
 variable "log_retention_days" {
   description = "Retention for the cell's own log groups (IoT rule errors, workflow)."
   type        = number

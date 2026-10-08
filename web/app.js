@@ -67,9 +67,19 @@ function fillDrillZones() {
   $("drillzone").value = "Z07";
 }
 
+// The public view reads the CloudFront-cached public/zones.json (works through an API outage and costs the
+// same for any number of viewers), falling back to the API until the file has been written once.
+async function publicZones() {
+  try {
+    const r = await fetch("public/zones.json", { cache: "no-store" });
+    if (r.ok) return await r.json();
+  } catch { /* fall back to the API */ }
+  return api("/public/zones");
+}
+
 async function refresh() {
   try {
-    const data = officer ? await api("/zones") : await api("/public/zones");
+    const data = officer ? await api("/zones") : await publicZones();
     const list = data.zones || [];
     zones = Object.fromEntries(list.map((z) => [z.zone_id, z]));
     paint();

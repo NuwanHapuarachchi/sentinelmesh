@@ -19,10 +19,12 @@ from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
 sfn = boto3.client("stepfunctions")
+lam = boto3.client("lambda")
 zones_table = ddb.Table(os.environ["ZONES_TABLE"])
 state_table = ddb.Table(os.environ["STATE_TABLE"])
 CELL = os.environ["CELL"]
 STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN", "")
+PUBLIC_FEED_FUNCTION = os.environ.get("PUBLIC_FEED_FUNCTION", "")
 _deser = TypeDeserializer()
 
 
@@ -39,10 +41,10 @@ def handler(event, context):
         obs = {k: _deser.deserialize(v) for k, v in image.items()}
         by_zone.setdefault(obs["zone_id"], []).append(obs)
 
-    failures = []
+    failures, changed = [], False
     for zone_id, observations in by_zone.items():
         try:
-            score_zone(zone_id, observations, now)
+            changed |= bool((score_zone(zone_id, observations, now) or {}).get("changed"))
             oldest = min(int(o.get("rx_ms", now * 1000)) for o in observations)
             metric("ScoreLatencyMs", now * 1000 - oldest, "Milliseconds", Cell=CELL)
         except Exception as exc:  # report the zone's records as failed so only they are retried
@@ -52,6 +54,8 @@ def handler(event, context):
                 for r in event["Records"]
                 if r.get("dynamodb", {}).get("Keys", {}).get("zone_id", {}).get("S") == zone_id
             ]
+    if changed:
+        refresh_public_feed()
     return {"batchItemFailures": failures}
 
 
@@ -66,14 +70,18 @@ def watchdog(now):
             break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
     blind = test_blind = 0
+    any_changed = False
     for zone in zones:
         state = score_zone(zone["zone_id"], [], now, zone=zone, only_if_known=True)
         is_blind = bool(state and state.get("blind"))
+        any_changed |= bool(state and state.get("changed"))
         if zone.get("is_test"):
             test_blind += is_blind
         else:
             blind += is_blind
     metric("BlindZones", blind, Cell=CELL)
+    if any_changed:
+        refresh_public_feed()
     return {"zones": len(zones), "blind": blind, "blind_test_zones": test_blind}
 
 
@@ -122,11 +130,22 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
                     ":c": CELL, ":dist": zone.get("district", ""),
                 },
             )
-            return {"tier": tier, "blind": assessment.blind}
+            # "changed" drives the public map refresh, which only shows real zones.
+            return {"tier": tier, "blind": assessment.blind, "changed": tier != previous_tier and not zone.get("is_test")}
         except ClientError as exc:
             if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
     raise RuntimeError(f"state update conflict for {zone_id}")
+
+
+def refresh_public_feed():
+    """Rebuild the public map file now rather than at its next minute (best effort: it also runs on a schedule)."""
+    if not PUBLIC_FEED_FUNCTION:
+        return
+    try:
+        lam.invoke(FunctionName=PUBLIC_FEED_FUNCTION, InvocationType="Event", Payload=b"{}")
+    except ClientError as exc:
+        log("public_feed_refresh_failed", error=str(exc))
 
 
 def start_escalation(zone, tier, assessment, doc, observations, drill, now):
