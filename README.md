@@ -8,14 +8,19 @@ Everything is Terraform and everything runs in GitLab CI/CD. Nobody provisions f
 
 | Path | What |
 |---|---|
-| `terraform/bootstrap/` | The pipeline's own AWS identity: CI user, deploy role, workload permissions boundary, and the GitLab CI variables that hold the CI key |
-| `terraform/app/` | The prototype (root module) |
-| `terraform/modules/` | `shared`, and later `cell`, `api`, `web`, `observability` |
+| `terraform/bootstrap/` | The pipeline's own AWS identity: CI user, deploy role (limited to roles that carry the workload boundary), and the GitLab CI variables that hold the CI key |
+| `terraform/app/` | The prototype (root module): API, web, delivery, operations, and the three cells |
+| `terraform/modules/` | `shared` (tables, buckets), `cell` (one detection and delivery cell), `lambda_fn` (one function with its own role and logs) |
 | `services/` | Lambda code (Python 3.13, stdlib + boto3) |
 | `web/` | Dashboard, officer console, simulated phone |
-| `tests/unit`, `tests/e2e`, `tests/load` | Tests run by the pipeline |
-| `scripts/gen_zones.py` | Generates the 80 hazard zones + test zones |
+| `tests/unit`, `tests/web`, `tests/e2e`, `tests/load` | Tests run by the pipeline (unit with moto, the phone page in Node, live end-to-end, burst) |
+| `scripts/gen_zones.py` | Generates the 80 hazard zones + test, heartbeat and load zones |
+| `scripts/put_secrets.py` | Writes SMS gateway credentials into Secrets Manager (configure-secrets job) |
 | `scripts/verify_teardown.py` | Read-only check that nothing is left after a destroy |
+
+## Cells
+
+Cells `a` and `b` each own 40 zones; cell `c` is a warm standby that owns none. Each cell is a full copy of the detection and delivery path (observation table and stream, scorer, escalation workflow, issuer, dispatch planner, senders, queues). Failover is a data change: the console's "Cell A lost" moves A's zones to C in the zones table and the IoT rules route the next reading there. Heartbeat zones H00, H01 and H02 send a test alert through each cell every 10 minutes, so every cell, including the standby, is proven to work.
 
 ## Account rules
 
@@ -39,7 +44,7 @@ Or from a terminal:
 glab ci run -b main --input stack:string(app) --input action:string(apply)
 ```
 
-Pushes to `main` run lint, unit tests, the IaC scan and an app plan. Other branches and MRs run lint and tests only; they never get AWS credentials.
+Pushes to `main` run lint, unit and web tests, the IaC and secret scans and an app plan. Other branches and MRs run lint, tests and scans only; they never get AWS credentials.
 
 ## One-time setup
 
@@ -57,5 +62,5 @@ The gateway's credentials never go through Terraform: add `SMS_PROVIDER_API_KEY`
 ## Teardown after the competition
 
 1. Run `stack=app`, `action=destroy`. The `verify-teardown` job must pass.
-2. Add a temporary admin key as `BOOTSTRAP_*` again and run `stack=bootstrap`, `action=destroy`. This removes the CI user, role, boundary and the `SM_AWS_*` variables.
+2. Add a temporary admin key as `BOOTSTRAP_*` again and run `stack=bootstrap`, `action=destroy`. This removes the CI user, the deploy role and the `SM_AWS_*` variables (the workload boundary went with the app stack).
 3. Delete the admin key, the `BOOTSTRAP_*` and `GITLAB_TOKEN` variables, and revoke the token. Optionally delete the Terraform states under **Operate → Terraform states**.
