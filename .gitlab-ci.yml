@@ -270,6 +270,7 @@ load-test:
     - !reference [.aws_auth, script]
     - pip install -q -r tests/requirements.txt
     - python tests/load/burst.py
+    - python tests/load/dispatch_burst.py
 
 # Writes the SMS gateway key, sender id and delivery-report secret from masked CI/CD variables into
 # Secrets Manager (Terraform only creates an empty placeholder, so keys never enter Terraform state).
