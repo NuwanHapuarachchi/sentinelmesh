@@ -36,7 +36,13 @@ data "archive_file" "services" {
 
 locals {
   role_path = "/${var.prefix}/"
-  cells     = toset(["a", "b"])
+
+  # a and b own the zones; c is the warm standby: fully deployed, owns no zones until a failover, and
+  # proven warm by its own heartbeat zone (H02). Idle serverless cells cost next to nothing.
+  active_cells    = ["a", "b"]
+  standby_cell    = "c"
+  cells           = toset(concat(local.active_cells, [local.standby_cell]))
+  heartbeat_zones = { H00 = "a", H01 = "b", H02 = "c" }
 }
 
 module "cell" {

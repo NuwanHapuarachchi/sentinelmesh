@@ -52,3 +52,45 @@ def test_viewer_sees_counts_only(stack, console):
 def test_viewer_cannot_start_drills(stack, console):
     status, _ = call(console, "POST", "/scenarios/{id}", {"zone_id": "Z07"}, groups="viewer", path={"id": "single_gauge"})
     assert status == 403
+
+
+class FakeLambda:
+    def __init__(self):
+        self.invoked = []
+
+    def invoke(self, FunctionName, InvocationType, Payload):
+        self.invoked.append((FunctionName, json.loads(Payload)))
+
+
+def owners(stack):
+    return {z["zone_id"]: (z["owner_cell"], z.get("home_cell")) for z in stack.table("zones").scan()["Items"]}
+
+
+def test_failover_hands_a_lost_cells_zones_to_the_standby_and_rescores_them(stack, console):
+    console.lam = FakeLambda()
+    before = owners(stack)
+    status, body = call(console, "POST", "/cells/{cell}/failover", path={"cell": "a"})
+    after = owners(stack)
+    moved = [z for z, (owner, _) in before.items() if owner == "a"]
+    assert status == 200 and body == {"cell": "a", "action": "failover", "to": "c", "zones_moved": len(moved)}
+    assert all(after[z] == ("c", "a") for z in moved)
+    assert all(after[z] == before[z] for z in before if z not in moved)  # cell b and the standby's own zone untouched
+    assert console.lam.invoked == [("sentinelmesh-c-scorer", {"mode": "watchdog"})]
+
+    status, body = call(console, "POST", "/cells/{cell}/restore", path={"cell": "a"})
+    assert status == 200 and body["to"] == "a" and body["zones_moved"] == len(moved)
+    assert owners(stack) == {z: (owner, None) for z, (owner, _) in before.items()}
+    assert console.lam.invoked[-1] == ("sentinelmesh-a-scorer", {"mode": "watchdog"})
+
+
+def test_the_standby_itself_cannot_be_failed_over(stack, console):
+    console.lam = FakeLambda()
+    status, body = call(console, "POST", "/cells/{cell}/failover", path={"cell": "c"})
+    assert status == 400 and "a, b" in body["error"]
+    assert console.lam.invoked == []
+
+
+def test_restore_with_nothing_moved_invokes_nothing(stack, console):
+    console.lam = FakeLambda()
+    status, body = call(console, "POST", "/cells/{cell}/restore", path={"cell": "b"})
+    assert status == 200 and body["zones_moved"] == 0 and console.lam.invoked == []

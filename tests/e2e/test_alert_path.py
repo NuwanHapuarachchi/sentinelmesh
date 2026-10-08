@@ -169,3 +169,12 @@ def test_failover_is_a_data_change(aws, publish, reset_zone):
     wait_for(lambda: state(aws, "T01").get("eval_cell") == "b")
     table(aws, "zones").update_item(Key={"zone_id": "T01"}, UpdateExpression="SET owner_cell = :c",
                                     ExpressionAttributeValues={":c": "a"})
+
+
+def test_standby_cell_scores_a_zone_it_adopts(aws, publish, reset_zone):
+    reset_zone("T01", owner="c")  # what a failover of cell a does to T01; reset_zone restores it afterwards
+    since_ms = int(time.time() * 1000)
+    publish("T01", "gauge", level_m=1.0)
+    assert wait_for(lambda: aws["ddb"].Table("sentinelmesh-c-observations").query(
+        KeyConditionExpression=Key("zone_id").eq("T01") & Key("sk").gt(str(since_ms)))["Items"])
+    wait_for(lambda: state(aws, "T01").get("eval_cell") == "c")

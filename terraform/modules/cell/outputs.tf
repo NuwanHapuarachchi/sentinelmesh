@@ -6,6 +6,10 @@ output "scorer_function" {
   value = module.scorer.name
 }
 
+output "scorer_function_arn" {
+  value = module.scorer.arn
+}
+
 output "scorer_mapping_uuid" {
   value = aws_lambda_event_source_mapping.scorer.uuid
 }

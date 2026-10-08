@@ -6,10 +6,10 @@ viewer       : per-district counts only (e.g. NGOs) - no evidence, no alerts det
 GET  /zones                     zone states with evidence
 GET  /alerts                    alerts issued today and yesterday
 POST /scenarios/{id}            start a scripted drill {"zone_id": "Z07"}
-POST /cells/{cell}/failover     move every zone owned by {cell} to the other cell (a data change)
-POST /cells/{cell}/restore      return zones to their catalogue owner
+POST /cells/{cell}/failover     cell {cell} is lost: the warm standby adopts its zones (a data change)
+POST /cells/{cell}/restore      return {cell}'s zones to it
 
-Environment: ZONES_TABLE, STATE_TABLE, ALERTS_TABLE, SCENARIO_FUNCTION.
+Environment: ZONES_TABLE, STATE_TABLE, ALERTS_TABLE, SCENARIO_FUNCTION, PREFIX, ACTIVE_CELLS ("a,b"), STANDBY_CELL ("c").
 """
 
 import json
@@ -29,6 +29,9 @@ zones = ddb.Table(os.environ["ZONES_TABLE"])
 states = ddb.Table(os.environ["STATE_TABLE"])
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 SCENARIOS = {"flood_corroboration", "single_gauge", "sensor_silence", "dam_surge_bypass"}
+PREFIX = os.environ.get("PREFIX", "sentinelmesh")
+ACTIVE_CELLS = [c for c in os.environ.get("ACTIVE_CELLS", "a,b").split(",") if c]
+STANDBY_CELL = os.environ.get("STANDBY_CELL", "c")
 
 
 def handler(event, context):
@@ -115,19 +118,24 @@ def start_scenario(scenario, body):
 
 
 def move_cell(cell, failover):
-    if cell not in ("a", "b"):
-        return respond(400, {"error": "cell must be a or b"})
-    other = "b" if cell == "a" else "a"
+    """Failover is a data change: a lost active cell's zones get the standby as owner (the IoT rules route
+    the next reading there); restore hands them back. Zones keep home_cell so restore knows where they live."""
+    if cell not in ACTIVE_CELLS:
+        return respond(400, {"error": f"cell must be one of {', '.join(ACTIVE_CELLS)}"})
+    target = STANDBY_CELL if failover else cell
     moved = 0
     for z in scan_all(zones):
         home = z.get("home_cell", z["owner_cell"])
         if failover and z["owner_cell"] == cell:
             zones.update_item(Key={"zone_id": z["zone_id"]}, UpdateExpression="SET owner_cell = :o, home_cell = :h",
-                              ExpressionAttributeValues={":o": other, ":h": home})
+                              ExpressionAttributeValues={":o": target, ":h": home})
             moved += 1
         elif not failover and home == cell and z["owner_cell"] != cell:
             zones.update_item(Key={"zone_id": z["zone_id"]}, UpdateExpression="SET owner_cell = :o REMOVE home_cell",
                               ExpressionAttributeValues={":o": cell})
             moved += 1
-    log("cell_moved", cell=cell, failover=failover, zones=moved, at=int(time.time()))
-    return respond(200, {"cell": cell, "action": "failover" if failover else "restore", "zones_moved": moved})
+    if moved:
+        # Re-score the moved zones in their new cell now rather than at its next 1-minute watchdog tick.
+        lam.invoke(FunctionName=f"{PREFIX}-{target}-scorer", InvocationType="Event", Payload=json.dumps({"mode": "watchdog"}))
+    log("cell_moved", cell=cell, failover=failover, to=target, zones=moved, at=int(time.time()))
+    return respond(200, {"cell": cell, "action": "failover" if failover else "restore", "to": target, "zones_moved": moved})

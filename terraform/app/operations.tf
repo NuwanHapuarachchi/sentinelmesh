@@ -17,6 +17,7 @@ module "heartbeat" {
     INBOX_TABLE       = local.t.inbox
     SUBSCRIBERS_TABLE = local.t.subscribers
     IOT_ENDPOINT      = data.aws_iot_endpoint.data.endpoint_address
+    HEARTBEAT_ZONES   = join(",", keys(local.heartbeat_zones))
   }
 
   policy_statements = [
@@ -24,7 +25,11 @@ module "heartbeat" {
     { Effect = "Allow", Action = "dynamodb:DeleteItem", Resource = local.a.zone_state },
     { Effect = "Allow", Action = "dynamodb:Query", Resource = local.a.inbox },
     { Effect = "Allow", Action = "dynamodb:PutItem", Resource = local.a.subscribers },
-    { Effect = "Allow", Action = "iot:Publish", Resource = "arn:aws:iot:${var.region}:${var.account_id}:topic/sm/obs/H00" },
+    {
+      Effect   = "Allow"
+      Action   = "iot:Publish"
+      Resource = [for z in keys(local.heartbeat_zones) : "arn:aws:iot:${var.region}:${var.account_id}:topic/sm/obs/${z}"]
+    },
   ]
 }
 
@@ -94,12 +99,14 @@ resource "aws_scheduler_schedule" "forecast" {
 
 # ---------- alarms (to the officers topic) ----------
 
+# One per heartbeat zone, keyed by zone rather than cell so a failover drill doesn't trip it.
 resource "aws_cloudwatch_metric_alarm" "heartbeat" {
-  alarm_name          = "${var.prefix}-heartbeat-missing"
-  alarm_description   = "No test alert has reached the phone through the full path for 20 minutes."
+  for_each            = local.heartbeat_zones
+  alarm_name          = "${var.prefix}-heartbeat-${each.key}-missing"
+  alarm_description   = "No test alert has reached the phone through cell ${each.value}'s full path (zone ${each.key}) for 20 minutes."
   namespace           = "SentinelMesh"
   metric_name         = "HeartbeatOK"
-  dimensions          = { Cell = "a" }
+  dimensions          = { Zone = each.key }
   statistic           = "Maximum"
   period              = 600
   evaluation_periods  = 2
@@ -169,17 +176,17 @@ resource "aws_cloudwatch_dashboard" "ops" {
   dashboard_body = jsonencode({
     widgets = [
       { type = "metric", x = 0, y = 0, width = 8, height = 6, properties = {
-        title = "Heartbeat: full path, reading to phone (ms)", region = var.region, stat = "Maximum", period = 600,
-      metrics = [["SentinelMesh", "HeartbeatE2EMs", "Cell", "a"]] } },
+        title = "Heartbeat per cell: full path, reading to phone (ms)", region = var.region, stat = "Maximum", period = 600,
+      metrics = [for z, c in local.heartbeat_zones : ["SentinelMesh", "HeartbeatE2EMs", "Zone", z, { label = "${z} (cell ${c})" }]] } },
       { type = "metric", x = 8, y = 0, width = 8, height = 6, properties = {
         title = "Time to first alert, p95 (ms)", region = var.region, stat = "p95", period = 300,
       metrics = [["SentinelMesh", "TimeToFirstAlertMs", "Tier", "imminent"], ["...", "warning"], ["...", "advisory"]] } },
       { type = "metric", x = 16, y = 0, width = 8, height = 6, properties = {
         title = "Blind zones per cell", region = var.region, stat = "Maximum", period = 60,
-      metrics = [["SentinelMesh", "BlindZones", "Cell", "a"], ["...", "b"]] } },
+      metrics = [for c in sort(tolist(local.cells)) : ["SentinelMesh", "BlindZones", "Cell", c]] } },
       { type = "metric", x = 0, y = 6, width = 8, height = 6, properties = {
         title = "Scoring latency p99 (ms)", region = var.region, stat = "p99", period = 60,
-      metrics = [["SentinelMesh", "ScoreLatencyMs", "Cell", "a"], ["...", "b"]] } },
+      metrics = [for c in sort(tolist(local.cells)) : ["SentinelMesh", "ScoreLatencyMs", "Cell", c]] } },
       { type = "metric", x = 8, y = 6, width = 8, height = 6, properties = {
         title = "Delivery receipts", region = var.region, stat = "Sum", period = 300,
       metrics = [["SentinelMesh", "DeliveryReceipts", "Channel", "sim", "Tier", "imminent"], ["...", "warning"], ["...", "advisory"]] } },
@@ -225,7 +232,7 @@ resource "aws_glue_catalog_table" "observations" {
   parameters = {
     "projection.enabled"        = "true"
     "projection.cell.type"      = "enum"
-    "projection.cell.values"    = "a,b"
+    "projection.cell.values"    = join(",", sort(tolist(local.cells)))
     "projection.dt.type"        = "date"
     "projection.dt.format"      = "yyyy-MM-dd"
     "projection.dt.range"       = "2026-10-01,NOW"

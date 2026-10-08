@@ -38,3 +38,13 @@ def test_test_zones_use_short_timers():
     for z in ZONES:
         if z["is_test"]:
             assert z["approval_timeout_s"] <= 60 and z["gauge_cadence_s"] <= 30
+
+
+def test_one_heartbeat_zone_per_cell_including_the_standby():
+    beats = {z["zone_id"]: z["owner_cell"] for z in ZONES if z["zone_id"].startswith("H")}
+    assert beats == {"H00": "a", "H01": "b", "H02": "c"}
+    assert all(z["is_test"] for z in ZONES if z["zone_id"].startswith("H"))
+
+
+def test_the_standby_owns_no_real_zones():
+    assert not [z for z in ZONES if z["owner_cell"] == "c" and not z["zone_id"].startswith("H")]

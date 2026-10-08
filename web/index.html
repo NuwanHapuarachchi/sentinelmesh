@@ -54,9 +54,14 @@
         </div>
         <div class="row"><button class="primary" id="rundrill">Start drill</button></div>
         <h2>Cells</h2>
+        <p class="muted">Cells A and B own the zones. Standby cell C owns none until a cell is lost.</p>
         <div class="row">
-          <button data-cell="a" data-act="failover">Move cell A zones to cell B</button>
-          <button class="quiet" data-cell="a" data-act="restore">Return zones to cell A</button>
+          <button data-cell="a" data-act="failover">Cell A lost: standby C adopts</button>
+          <button class="quiet" data-cell="a" data-act="restore">Restore A</button>
+        </div>
+        <div class="row">
+          <button data-cell="b" data-act="failover">Cell B lost: standby C adopts</button>
+          <button class="quiet" data-cell="b" data-act="restore">Restore B</button>
         </div>
         <p id="opsmsg" class="muted" aria-live="polite"></p>
       </section>

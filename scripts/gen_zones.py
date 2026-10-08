@@ -1,7 +1,8 @@
 """Generate the hazard-zone catalogue used by Terraform, the services, the tests and the web map.
 
 80 demo zones are hexagons laid over six districts of the Kelani/Kalu basins, plus isolated
-test zones (T01-T04 for e2e tests, H00 for the heartbeat). Output is deterministic.
+test zones (T01-T04 for e2e tests; H00, H01, H02 for the per-cell heartbeat, one in each cell including
+the standby). Output is deterministic.
 
     python scripts/gen_zones.py
 """
@@ -33,7 +34,9 @@ TEST_ZONES = [
     ("T02", "a"),
     ("T03", "b"),
     ("T04", "b"),
-    ("H00", "a"),
+    ("H00", "a"),  # one heartbeat zone per cell, so every cell's full path is proven every few minutes
+    ("H01", "b"),
+    ("H02", "c"),  # c is the warm standby: its heartbeat is the evidence that it really is warm
 ]
 TEST_CENTRE = (6.45, 81.05)
 LOAD_CENTRE = (6.20, 81.20)

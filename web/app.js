@@ -160,7 +160,7 @@ function wireActions() {
         map.flyTo(layers[r.zone_id].getBounds().getCenter(), 12);
       } else if (t.dataset.act) {
         const r = await api(`/cells/${t.dataset.cell}/${t.dataset.act}`, { method: "POST" });
-        $("opsmsg").textContent = `${r.zones_moved} zones moved. New readings now go to the other cell.`;
+        $("opsmsg").textContent = `${r.zones_moved} zones moved to cell ${String(r.to).toUpperCase()}. New readings now go there.`;
       }
     } catch (err) {
       $("opsmsg").textContent = err.message;

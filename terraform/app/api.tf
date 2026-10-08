@@ -87,13 +87,16 @@ module "console_api" {
     STATE_TABLE       = local.t.zone_state
     ALERTS_TABLE      = local.t.alerts
     SCENARIO_FUNCTION = module.scenario.name
+    PREFIX            = var.prefix
+    ACTIVE_CELLS      = join(",", local.active_cells)
+    STANDBY_CELL      = local.standby_cell
   }
 
   policy_statements = [
     { Effect = "Allow", Action = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = local.a.zones },
     { Effect = "Allow", Action = "dynamodb:Scan", Resource = local.a.zone_state },
     { Effect = "Allow", Action = "dynamodb:Query", Resource = "${local.a.alerts}/index/by-day" },
-    { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = module.scenario.arn },
+    { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = concat([module.scenario.arn], [for c in module.cell : c.scorer_function_arn]) },
   ]
 }
 
