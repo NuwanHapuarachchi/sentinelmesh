@@ -42,7 +42,7 @@ module "public_api" {
   boundary_arn = local.fn_common.boundary_arn
   role_path    = local.fn_common.role_path
 
-  environment = {
+  environment = merge({
     ZONES_TABLE              = local.t.zones
     STATE_TABLE              = local.t.zone_state
     SUBSCRIBERS_TABLE        = local.t.subscribers
@@ -53,7 +53,8 @@ module "public_api" {
     IOT_ENDPOINT             = data.aws_iot_endpoint.data.endpoint_address
     SMS_SECRET_ARN           = aws_secretsmanager_secret.sms.arn
     REPORT_PEPPER_SECRET_ARN = aws_secretsmanager_secret.report_pepper.arn
-  }
+    REAL_SMS_ALLOWLIST       = join(",", var.real_sms_allowlist)
+  }, local.sms_config) # verification codes go out through the same SMS provider as alerts
 
   policy_statements = [
     { Effect = "Allow", Action = "dynamodb:GetItem", Resource = [local.a.zones, local.a.subscribers] },
@@ -64,6 +65,9 @@ module "public_api" {
     { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = local.a.deliveries },
     { Effect = "Allow", Action = "iot:Publish", Resource = "arn:aws:iot:${var.region}:${var.account_id}:topic/sm/obs/*" },
     { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = [aws_secretsmanager_secret.sms.arn, aws_secretsmanager_secret.report_pepper.arn] },
+    { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"], Resource = local.a.ratelimits },
+    { Effect = "Allow", Action = "dynamodb:DeleteItem", Resource = local.a.subscribers },
+    { Effect = "Allow", Action = "sms-voice:SendTextMessage", Resource = "*" }, # verification codes when SMS_PROVIDER=eum
   ]
 }
 
@@ -253,7 +257,9 @@ locals {
   routes = {
     "/reports"               = { post = "public" }
     "/public/zones"          = { get = "public" }
-    "/phone/subscribe"       = { post = "public" }
+    "/phone/subscribe"       = { post = "public", delete = "public" }
+    "/phone/verify/start"    = { post = "public" }
+    "/phone/verify/finish"   = { post = "public" }
     "/phone/inbox"           = { get = "public" }
     "/phone/ack"             = { post = "public" }
     "/sms/dlr"               = { post = "public" }
@@ -269,7 +275,7 @@ locals {
   cors_headers = {
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
     "method.response.header.Access-Control-Allow-Headers" = "'Authorization,Content-Type,X-Device-Token'"
-    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,DELETE,OPTIONS'"
   }
 
   openapi = {
@@ -451,6 +457,40 @@ resource "aws_wafv2_web_acl" "api" {
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "reports-rate"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Verification codes cost an SMS each: 10 requests per 5 minutes per IP (plus 3 per number per hour in the API).
+  rule {
+    name     = "verify-rate"
+    priority = 5
+    action {
+      block {}
+    }
+    statement {
+      rate_based_statement {
+        limit                 = 10
+        evaluation_window_sec = 300
+        aggregate_key_type    = "IP"
+        scope_down_statement {
+          byte_match_statement {
+            search_string         = "/phone/verify/start"
+            positional_constraint = "ENDS_WITH"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+          }
+        }
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "verify-rate"
       sampled_requests_enabled   = true
     }
   }

@@ -19,7 +19,7 @@ def respond(status, body):
             "Content-Type": "application/json; charset=utf-8",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Authorization,Content-Type,X-Device-Token",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+            "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
         },
         "body": json.dumps(body, default=_default, ensure_ascii=False),
     }

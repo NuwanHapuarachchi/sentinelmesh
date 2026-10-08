@@ -50,6 +50,7 @@ async function boot() {
     location.reload();
   };
   $("dismiss").onclick = () => ($("alert").hidden = true);
+  $("stop").onclick = stop;
   if (me) showHome();
 }
 
@@ -59,15 +60,35 @@ function chosenArea() {
   return { zone, f, lang: $("lang").value, name: f.properties.name };
 }
 
+// With a number: first click sends a code, second click checks it and signs up with the number.
+let pendingNumber = null;
+
 async function join() {
   const { zone, f, lang, name } = chosenArea();
   const [lon, lat] = f.geometry.coordinates[0][0];
-  const token = crypto.getRandomValues(new Uint32Array(4)).join("-");
+  const number = $("msisdn").value.trim();
   try {
     $("join").disabled = true;
+    $("setupmsg").textContent = "";
+    if (number && pendingNumber !== number) {
+      const r = await call("/phone/verify/start", { method: "POST", body: JSON.stringify({ msisdn: number }) });
+      pendingNumber = number;
+      $("codebox").hidden = false;
+      $("codehint").textContent = r.simulator_code
+        ? `No SMS provider in this demo stack. Your code is ${r.simulator_code}.`
+        : "We sent a 6-digit code by SMS. It expires in 10 minutes.";
+      $("join").textContent = "Confirm code and turn on warnings";
+      return;
+    }
+    const body = { zone_id: zone, lang, geohash6: geohash(lat, lon) };
+    if (number) {
+      const v = await call("/phone/verify/finish", { method: "POST", body: JSON.stringify({ msisdn: number, code: $("code").value.trim() }) });
+      Object.assign(body, { msisdn: number, verify_token: v.verify_token });
+    }
+    const token = crypto.getRandomValues(new Uint32Array(4)).join("-");
     me = { token, zone, lang, name };
-    const r = await call("/phone/subscribe", { method: "POST", body: JSON.stringify({ zone_id: zone, lang, geohash6: geohash(lat, lon), device_token: token }) });
-    me.sid = r.subscriber_id;
+    const r = await call("/phone/subscribe", { method: "POST", body: JSON.stringify({ ...body, device_token: token }) });
+    Object.assign(me, { sid: r.subscriber_id, sms: r.sms });
     store.set("sm-phone", me);
     showHome();
   } catch (e) {
@@ -76,6 +97,18 @@ async function join() {
   } finally {
     $("join").disabled = false;
   }
+}
+
+async function stop() {
+  // Withdraw consent: the server erases this phone's record (and number), then the phone forgets it too.
+  try {
+    await call(`/phone/subscribe?subscriber_id=${encodeURIComponent(me.sid)}`, { method: "DELETE" });
+  } catch (e) {
+    $("homestatus").textContent = `Couldn't stop warnings: ${e.message}`;
+    return;
+  }
+  for (const k of ["sm-phone", "sm-seen", "sm-shown", "sm-cb"]) localStorage.removeItem(k);
+  location.reload();
 }
 
 function listen() {
@@ -91,8 +124,9 @@ function showHome() {
   $("home").hidden = false;
   $("homearea").textContent = me.name;
   $("homestatus").textContent = me.sid
-    ? "Warnings are on: emergency broadcasts and SMS. This phone checks every few seconds."
+    ? `Warnings are on: emergency broadcasts${me.sms ? ", SMS to your number" : ""} and alerts in this app. This phone checks every few seconds.`
     : "Listening for emergency broadcasts in this area. No sign-up, nothing sent from this phone.";
+  $("stop").hidden = !me.sid;
   render();
   pollBroadcast();
   setInterval(pollBroadcast, 2000);

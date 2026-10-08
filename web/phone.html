@@ -21,9 +21,16 @@
           <option value="en">English</option>
         </select>
       </label>
+      <label>Phone number for SMS (optional)
+        <input id="msisdn" type="tel" inputmode="tel" autocomplete="tel" placeholder="07X XXX XXXX">
+      </label>
+      <div id="codebox" hidden>
+        <label>Code we sent you <input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>
+        <p class="fine" id="codehint"></p>
+      </div>
       <button id="join">Turn on warnings</button>
       <button id="listen" class="secondary">Receive broadcasts only (no sign-up)</button>
-      <p class="fine">Emergency broadcasts reach every phone in the area from the towers, with no sign-up. Turning on warnings also sends SMS and confirms they arrived.</p>
+      <p class="fine">Emergency broadcasts reach every phone in the area from the towers, with no sign-up. Turning on warnings also confirms they arrived. We keep only your area (about 1 km) and, if you give it, your number, only to warn you; stop any time.</p>
       <p class="fine" id="setupmsg"></p>
     </section>
 
@@ -32,6 +39,7 @@
       <p id="homestatus">Warnings are on. This phone checks for alerts every few seconds.</p>
       <div id="history"></div>
       <button class="link" id="reset">Use a different area</button>
+      <button class="link" id="stop" hidden>Stop warnings and delete my details</button>
     </section>
 
     <div id="alert" class="alert" role="alertdialog" aria-live="assertive" hidden>

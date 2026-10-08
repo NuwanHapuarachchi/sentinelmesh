@@ -87,3 +87,74 @@ def test_delivery_report_needs_the_shared_secret(stack, public):
     body = {"ref": "A1|S1", "status": "delivered"}
     assert call(public, "POST", "/sms/dlr", body, headers={"X-DLR-Secret": "wrong"})[0] == 403
     assert call(public, "POST", "/sms/dlr", body, headers={"X-DLR-Secret": "dlr-s3cret"})[0] == 200
+
+
+# ---- verified phone numbers, consent, unsubscribe ----
+
+def start(public, number="0771234567"):
+    return call(public, "POST", "/phone/verify/start", {"msisdn": number})
+
+
+def verified_token(public, number="0771234567"):
+    status, body = start(public, number)
+    assert status == 202 and body["sent"] is False and len(body["simulator_code"]) == 6
+    status, body = call(public, "POST", "/phone/verify/finish", {"msisdn": number, "code": body["simulator_code"]})
+    assert status == 200
+    return body["verify_token"]
+
+
+def sub_body(**extra):
+    return {"zone_id": "Z07", "lang": "en", "geohash6": "tc3d2x", "device_token": "device-token-0123456789", **extra}
+
+
+def test_a_verified_number_is_stored_with_consent(stack, public):
+    token = verified_token(public)
+    status, body = call(public, "POST", "/phone/subscribe", sub_body(msisdn="077 123 4567", verify_token=token))
+    assert status == 201 and body["sms"] is True
+    item = stack.table("subscribers").get_item(Key={"subscriber_id": body["subscriber_id"]})["Item"]
+    assert item["msisdn"] == "+94771234567" and item["consent"] == public.CONSENT_VERSION and item["consent_at"] > 0
+
+
+def test_a_number_without_proof_is_refused(stack, public):
+    assert call(public, "POST", "/phone/subscribe", sub_body(msisdn="0771234567"))[0] == 400
+    other = verified_token(public, "0779999999")
+    assert call(public, "POST", "/phone/subscribe", sub_body(msisdn="0771234567", verify_token=other))[0] == 400
+    expired = "1." + "0" * 64
+    assert call(public, "POST", "/phone/subscribe", sub_body(msisdn="0771234567", verify_token=expired))[0] == 400
+
+
+def test_wrong_codes_are_counted_and_then_the_code_is_dead(stack, public):
+    status, body = start(public)
+    for _ in range(5):
+        assert call(public, "POST", "/phone/verify/finish", {"msisdn": "0771234567", "code": "000000"})[0] == 400
+    right = call(public, "POST", "/phone/verify/finish", {"msisdn": "0771234567", "code": body["simulator_code"]})
+    assert right[0] == 400 and "new one" in right[1]["error"]
+
+
+def test_codes_are_limited_per_number_and_only_for_mobiles(stack, public):
+    assert start(public, "0112345678")[0] == 400  # a landline
+    assert [start(public)[0] for _ in range(4)] == [202, 202, 202, 429]
+
+
+def test_the_allowlist_limits_real_sms_to_demo_phones(stack, public, monkeypatch):
+    monkeypatch.setenv("REAL_SMS_ALLOWLIST", "0771234567, 0779999999")
+    assert start(public, "0775555555")[0] == 403
+    assert start(public, "0779999999")[0] == 202
+
+
+def test_a_real_provider_texts_the_code_instead_of_returning_it(stack, public, monkeypatch):
+    sent = []
+    monkeypatch.setattr(public, "PROVIDER", "http")
+    monkeypatch.setattr(public, "send_code", lambda msisdn, code: sent.append((msisdn, code)) or {"status": "SENT"})
+    status, body = start(public)
+    assert status == 202 and body == {"sent": True} and sent[0][0] == "+94771234567"
+
+
+def test_unsubscribe_erases_the_record_and_needs_the_device(stack, public):
+    _, body = call(public, "POST", "/phone/subscribe", sub_body())
+    sid = body["subscriber_id"]
+    assert call(public, "DELETE", "/phone/subscribe", query={"subscriber_id": sid}, headers={"X-Device-Token": "wrong"})[0] == 403
+    status, out = call(public, "DELETE", "/phone/subscribe", query={"subscriber_id": sid},
+                       headers={"X-Device-Token": "device-token-0123456789"})
+    assert status == 200 and out == {"unsubscribed": True}
+    assert "Item" not in stack.table("subscribers").get_item(Key={"subscriber_id": sid})

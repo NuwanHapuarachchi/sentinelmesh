@@ -39,6 +39,12 @@ variable "eum_origination_identity" {
   default     = ""
 }
 
+variable "real_sms_allowlist" {
+  description = "If set, only these numbers may verify for real SMS (e.g. the team's phones during the competition)."
+  type        = list(string)
+  default     = []
+}
+
 variable "sms_provider_url" {
   description = "Third-party SMS gateway send URL. Empty = simulator. Set via TF_VAR_sms_provider_url."
   type        = string
