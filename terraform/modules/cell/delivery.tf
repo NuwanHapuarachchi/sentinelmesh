@@ -49,17 +49,18 @@ module "issuer" {
   role_path    = var.role_path
 
   environment = {
-    CELL             = var.cell
-    ALERTS_TABLE     = var.delivery.alerts.name
-    APPROVALS_TABLE  = var.delivery.approvals.name
-    ZONES_TABLE      = var.zones_table.name
-    STATE_TABLE      = var.state_table.name
-    WEB_BUCKET       = var.delivery.web_bucket.name
-    DECISIONS_BUCKET = var.delivery.decisions_bucket.name
-    QUEUE_IMMINENT   = aws_sqs_queue.tier["imminent"].url
-    QUEUE_WARNING    = aws_sqs_queue.tier["warning"].url
-    QUEUE_ADVISORY   = aws_sqs_queue.tier["advisory"].url
-    RULES_VERSION    = var.rules_version
+    CELL                 = var.cell
+    ALERTS_TABLE         = var.delivery.alerts.name
+    APPROVALS_TABLE      = var.delivery.approvals.name
+    ZONES_TABLE          = var.zones_table.name
+    STATE_TABLE          = var.state_table.name
+    WEB_BUCKET           = var.delivery.web_bucket.name
+    DECISIONS_BUCKET     = var.delivery.decisions_bucket.name
+    QUEUE_IMMINENT       = aws_sqs_queue.tier["imminent"].url
+    QUEUE_WARNING        = aws_sqs_queue.tier["warning"].url
+    QUEUE_ADVISORY       = aws_sqs_queue.tier["advisory"].url
+    RULES_VERSION        = var.rules_version
+    PUBLIC_FEED_FUNCTION = var.public_feed.name
   }
 
   policy_statements = [
@@ -68,6 +69,7 @@ module "issuer" {
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = [var.delivery.approvals.arn, var.state_table.arn] },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.web_bucket.arn}/cap/*" },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.decisions_bucket.arn}/decisions/*" },
+    { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = var.public_feed.arn },
   ]
 }
 

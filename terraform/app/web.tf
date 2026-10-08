@@ -8,7 +8,8 @@ resource "aws_cloudfront_origin_access_control" "web" {
   signing_protocol                  = "sigv4"
 }
 
-# The public map file (public/zones.json): rebuilt every minute and whenever a scorer sees a tier change.
+# The public files (map: public/zones.json, CAP-over-Atom feed: public/cap.atom): rebuilt every minute,
+# whenever a scorer sees a tier change, and after an alert is issued.
 module "public_feed" {
   source       = "../modules/lambda_fn"
   name         = "${var.prefix}-public-feed"
@@ -19,12 +20,14 @@ module "public_feed" {
   role_path    = local.fn_common.role_path
 
   environment = {
-    STATE_TABLE = local.t.zone_state
-    WEB_BUCKET  = module.shared.buckets.web
+    STATE_TABLE  = local.t.zone_state
+    ALERTS_TABLE = local.t.alerts
+    WEB_BUCKET   = module.shared.buckets.web
   }
 
   policy_statements = [
     { Effect = "Allow", Action = "dynamodb:Scan", Resource = local.a.zone_state },
+    { Effect = "Allow", Action = "dynamodb:Query", Resource = "${local.a.alerts}/index/by-day" },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${module.shared.bucket_arns.web}/public/*" },
   ]
 }

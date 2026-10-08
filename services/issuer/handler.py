@@ -11,7 +11,7 @@ op=record -> decision record only, for a warning or all-clear that was not issue
 
 Decision records are write-once: the bucket policy rejects any PutObject without If-None-Match.
 Environment: ALERTS_TABLE, APPROVALS_TABLE, ZONES_TABLE, STATE_TABLE, WEB_BUCKET, DECISIONS_BUCKET, CELL,
-QUEUE_IMMINENT, QUEUE_WARNING, QUEUE_ADVISORY, RULES_VERSION.
+QUEUE_IMMINENT, QUEUE_WARNING, QUEUE_ADVISORY, RULES_VERSION, PUBLIC_FEED_FUNCTION (optional).
 """
 
 import hashlib
@@ -30,6 +30,7 @@ from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
+lam = boto3.client("lambda")
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 approvals = ddb.Table(os.environ["APPROVALS_TABLE"])
 zones = ddb.Table(os.environ["ZONES_TABLE"])
@@ -115,6 +116,9 @@ def issue(inp, approval, execution=None, entered=None):
         settle_approval(approval.get("approval_id") or inp.get("approval_id"), "AUTO_ISSUED", OPEN)
     record_decision(inp, mode=mode, approval=approval, alert_id=alert_id, cap_sha=cap_sha, execution=execution, at=issued)
 
+    if not is_test:
+        refresh_public_feed()
+
     lag_ms = time.time() * 1000 - trigger_rx_ms
     metric("DecisionLatencyMs", lag_ms, "Milliseconds", Tier=tier, Mode=mode)
     log("alert_issued", alert_id=alert_id, zone_id=inp["zone_id"], tier=tier, mode=mode, status=status)
@@ -125,6 +129,16 @@ def issue(inp, approval, execution=None, entered=None):
                f"({zone['district']}). Mode: {mode}. Score {inp.get('score')}. Reason: {inp.get('reason')}.")
     return {"alert_id": alert_id, "queue_url": QUEUES[tier], "message": json.dumps(message, ensure_ascii=False),
             "summary": summary, "is_test": is_test}
+
+
+def refresh_public_feed():
+    """Put the new alert in the public CAP feed now rather than at its next minute (best effort)."""
+    if not os.environ.get("PUBLIC_FEED_FUNCTION"):
+        return
+    try:
+        lam.invoke(FunctionName=os.environ["PUBLIC_FEED_FUNCTION"], InvocationType="Event", Payload=b"{}")
+    except ClientError as exc:
+        log("public_feed_refresh_failed", error=str(exc))
 
 
 def previous_alerts(alert_ids):
