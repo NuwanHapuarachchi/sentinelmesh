@@ -25,6 +25,7 @@ state_table = ddb.Table(os.environ["STATE_TABLE"])
 CELL = os.environ["CELL"]
 STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN", "")
 PUBLIC_FEED_FUNCTION = os.environ.get("PUBLIC_FEED_FUNCTION", "")
+HEARTBEAT_PREFIX = "H"
 _deser = TypeDeserializer()
 
 
@@ -110,7 +111,8 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
             start_escalation(zone, tier, assessment, doc, observations, drill, now)
         # Falling below advisory closes the alert episode. If an alert went out, ask for an all-clear.
         ended = sc.RANK[tier] < sc.RANK["advisory"] <= sc.RANK[previous_tier]
-        if ended and item.get("last_alert_id"):
+        # Heartbeat zones alert every few minutes by design; nobody needs to confirm their all-clears.
+        if ended and item.get("last_alert_id") and not zone_id.startswith(HEARTBEAT_PREFIX):
             start_clear(zone, assessment, doc, item["last_alert_id"], now)
         if tier != previous_tier:
             metric("TierChange", 1, Cell=CELL, Tier=tier)

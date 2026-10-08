@@ -151,3 +151,10 @@ def test_no_all_clear_when_no_alert_went_out(stack, scorer):
     scorer.handler({"mode": "watchdog"}, None)
     assert state(stack, "Z07")["tier"] == "normal"
     assert scorer.sfn.started == []
+
+
+def test_heartbeat_zones_never_ask_for_all_clears(stack, scorer):
+    winding_down(stack, "H00", last_alert_id="SM-20261008-H00-ABC123")
+    scorer.handler({"mode": "watchdog"}, None)
+    assert state(stack, "H00")["tier"] == "normal" and "last_alert_id" not in state(stack, "H00")
+    assert scorer.sfn.started == []

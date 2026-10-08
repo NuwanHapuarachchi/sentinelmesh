@@ -119,3 +119,10 @@ def test_all_clear_requests_are_listed_like_warnings(stack, approvals):
     }, None)
     items = json.loads(approvals.handler(api_event("GET", "/approvals", groups="duty_officer"), None)["body"])["approvals"]
     assert [(i["approval_id"], i["tier"]) for i in items] == [("Z07-clear-e1-1", "clear")]
+
+
+def test_officers_never_see_hidden_zones_approvals(stack, approvals):
+    request(approvals, approval_id="T01-warning-e1-1", zone="T01", is_test=True)
+    request(approvals, approval_id="Z07-warning-e1-1", zone="Z07")
+    items = json.loads(approvals.handler(api_event("GET", "/approvals", groups="duty_officer"), None)["body"])["approvals"]
+    assert [i["approval_id"] for i in items] == ["Z07-warning-e1-1"]

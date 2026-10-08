@@ -69,11 +69,12 @@ def request(event):
 
 
 def list_pending():
+    """Pending approvals for real zones; hidden test, heartbeat and load zones are never shown to officers."""
     items = approvals.query(IndexName="pending", KeyConditionExpression=Key("pending").eq("PENDING"))["Items"]
     now = int(time.time())
     return respond(200, {"approvals": [
         {k: v for k, v in i.items() if k != "task_token"} | {"seconds_left": max(0, int(i["deadline"]) - now)}
-        for i in items
+        for i in items if not str(i.get("zone_id", "")).startswith(("T", "H", "L"))
     ]})
 
 
