@@ -61,3 +61,9 @@ variable "rules_version" {
 variable "evidence_bucket" {
   type = object({ name = string, arn = string })
 }
+
+variable "log_retention_days" {
+  description = "Retention for the cell's own log groups (IoT rule errors, workflow)."
+  type        = number
+  default     = 14
+}

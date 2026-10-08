@@ -36,7 +36,8 @@ resource "aws_dynamodb_table" "observations" {
 }
 
 resource "aws_cloudwatch_log_group" "iot_errors" {
-  name = "/${var.prefix}/${var.cell}/iot-rule-errors"
+  name              = "/${var.prefix}/${var.cell}/iot-rule-errors"
+  retention_in_days = var.log_retention_days
 }
 
 resource "aws_iam_role" "iot_rules" {
