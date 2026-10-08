@@ -94,3 +94,13 @@ test("an alert arriving by broadcast and SMS pops up once and the SMS is still a
   assert.match(history, /EMERGENCY by SMS/);
   assert.match(history, /Cell broadcast/);
 });
+
+test("an all-clear broadcast is shown as all clear", async () => {
+  const b = await booted({ broadcast: { ...BROADCAST(), alert_id: "SM-2", tier: "clear", texts: { en: "ALL CLEAR Z07", si: "x", ta: "y" } } });
+  b.els.lang.value = "en";
+  b.els.zone.value = "Z07";
+  b.els.listen.onclick();
+  for (let i = 0; i < 5; i++) await settle();
+  assert.equal(b.els.alert.className, "alert clear");
+  assert.match(b.els.alerthead.textContent, /^All clear/);
+});

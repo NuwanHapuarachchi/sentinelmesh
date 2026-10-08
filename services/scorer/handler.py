@@ -108,6 +108,10 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
         # same execution name and Step Functions collapses the duplicate.
         if went_up and sc.RANK[tier] >= sc.RANK["advisory"]:
             start_escalation(zone, tier, assessment, doc, observations, drill, now)
+        # Falling below advisory closes the alert episode. If an alert went out, ask for an all-clear.
+        ended = sc.RANK[tier] < sc.RANK["advisory"] <= sc.RANK[previous_tier]
+        if ended and item.get("last_alert_id"):
+            start_clear(zone, assessment, doc, item["last_alert_id"], now)
         if tier != previous_tier:
             metric("TierChange", 1, Cell=CELL, Tier=tier)
             log("tier_change", zone_id=zone_id, cell=CELL, frm=previous_tier, to=tier, score=assessment.score,
@@ -116,9 +120,9 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
         doc["contributions"], doc["agreeing"], doc["reason"] = assessment.contributions, assessment.agreeing, assessment.reason
         update = ("SET version = :nv, tier = :t, score = :s, blind = :b, hazard = :h, doc = :d, "
                   "updated_at = :u, eval_cell = :c, district = :dist")
-        # Falling below advisory closes the alert episode: clear the workflow's de-duplication gate.
-        if sc.RANK[tier] < sc.RANK["advisory"] <= sc.RANK[previous_tier]:
-            update += " REMOVE alert_rank, alert_tier, alert_exec, alert_confirmed_at"
+        # The episode's end also clears the workflow's de-duplication gate and the alert the all-clear covers.
+        if ended:
+            update += " REMOVE alert_rank, alert_tier, alert_exec, alert_confirmed_at, last_alert_id"
         try:
             state_table.update_item(
                 Key={"zone_id": zone_id},
@@ -146,6 +150,39 @@ def refresh_public_feed():
         lam.invoke(FunctionName=PUBLIC_FEED_FUNCTION, InvocationType="Event", Payload=b"{}")
     except ClientError as exc:
         log("public_feed_refresh_failed", error=str(exc))
+
+
+def start_clear(zone, assessment, doc, last_alert_id, now):
+    """Ask for an all-clear for the alert this episode issued. The workflow waits for an officer (twice the
+    zone's approval window) and sends nothing if nobody confirms. The issuer takes the hazard and drill status
+    from the alert being cleared."""
+    if not STATE_MACHINE_ARN:
+        return
+    payload = {
+        "zone_id": zone["zone_id"],
+        "tier": "clear",
+        "hazard": assessment.hazard,
+        "reason": "de-escalated",
+        "score": assessment.score,
+        "contributions": assessment.contributions,
+        "agreeing": assessment.agreeing,
+        "blind": assessment.blind,
+        "evidence": doc["ev"],
+        "episode": doc["episode"],
+        "is_test": bool(zone.get("is_test")),
+        "approval_timeout_s": 2 * int(zone.get("approval_timeout_s", 300)),
+        "trigger_rx_ms": int(now * 1000),
+        "origin": "scorer",
+        "cell": CELL,
+        "references": [last_alert_id],
+    }
+    name = sc.execution_name(zone["zone_id"], "clear", doc["episode"], doc.get("episode_started", 0))
+    try:
+        sfn.start_execution(stateMachineArn=STATE_MACHINE_ARN, name=name, input=json.dumps(payload))
+        log("all_clear_requested", zone_id=zone["zone_id"], clears=last_alert_id, execution=name)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ExecutionAlreadyExists":
+            raise
 
 
 def start_escalation(zone, tier, assessment, doc, observations, drill, now):

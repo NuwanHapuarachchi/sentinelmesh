@@ -32,6 +32,7 @@ button.secondary { background: #fff; color: var(--river); }
 }
 .alert.warning { background: var(--warning); }
 .alert.advisory { background: var(--advisory); color: #1b1b1b; }
+.alert.clear { background: #2e7d4f; }
 .alert-head { font-weight: 700; font-size: 18px; border-bottom: 2px solid currentColor; padding-bottom: 8px; }
 .alert-text { font-size: 22px; font-weight: 700; line-height: 1.3; }
 .alert-meta { font-size: 13px; opacity: .85; }

@@ -78,7 +78,15 @@ def issue(inp, approval, execution=None, entered=None):
     alert_id = f"SM-{day}-{inp['zone_id']}-{suffix.upper()}"
     mode = approval.get("decision") or ("auto" if tier != "warning" else "timeout")
     trigger_rx_ms = int(inp.get("trigger_rx_ms") or issued * 1000)
-    references = previous_alerts(inp.get("references")) if tier == "clear" else []
+    references = []
+    if tier == "clear":
+        # An all-clear speaks for the alert it ends: same hazard, and an exercise's all-clear is an exercise.
+        ended = previous_alerts(inp.get("references"))
+        references = [cap.reference(a["alert_id"], int(a["issued_at"])) for a in ended]
+        if ended:
+            hazard = ended[-1].get("hazard", hazard)
+            if not is_test and ended[-1].get("status") in ("Exercise", "Test"):
+                status = ended[-1]["status"]
 
     xml = cap.build(alert_id, zone, tier, hazard, issued, status=status, references=references)
     cap_key = f"cap/{day}/{alert_id}.xml"
@@ -120,13 +128,9 @@ def issue(inp, approval, execution=None, entered=None):
 
 
 def previous_alerts(alert_ids):
-    """CAP references for the alerts an all-clear ends (those that can still be found)."""
-    refs = []
-    for alert_id in alert_ids or []:
-        item = alerts.get_item(Key={"alert_id": alert_id, "sk": "META"}).get("Item")
-        if item:
-            refs.append(cap.reference(alert_id, int(item["issued_at"])))
-    return refs
+    """The alert records an all-clear ends (those that can still be found)."""
+    found = (alerts.get_item(Key={"alert_id": a, "sk": "META"}).get("Item") for a in alert_ids or [])
+    return [item for item in found if item]
 
 
 def settle_approval(approval_id, status, from_statuses):

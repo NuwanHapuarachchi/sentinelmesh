@@ -122,3 +122,22 @@ def test_queue_failure_tells_officers_and_frees_the_gate(machine):
         assert states[name]["Next"] == "ReleaseAfterFailure"
         assert [c["Next"] for c in states[name]["Catch"]] == ["ReleaseAfterFailure"]
     assert states["ReleaseAfterFailure"]["Next"] == "Failed"
+
+
+def test_all_clears_need_an_officer_and_send_nothing_otherwise(machine):
+    states = machine["States"]
+    assert states["RankTier"]["Choices"][0] == {"Variable": "$.tier", "StringEquals": "clear", "Next": "RequestClearApproval"}
+    wait = states["RequestClearApproval"]
+    assert wait["Resource"] == "arn:aws:states:::lambda:invoke.waitForTaskToken"
+    assert [c["Next"] for c in wait["Catch"]] == ["MarkClearUnconfirmed"]  # timeout or failure: stay alerted
+    # From the wait, Issue is reachable only through the "still calm" check ...
+    assert "Issue" not in reachable(states, "RequestClearApproval", blocked={"ClearStillValid"})
+    # ... and never after an unconfirmed or held all-clear.
+    assert "Issue" not in reachable(states, "MarkClearUnconfirmed")
+    assert "Issue" not in reachable(states, "RecordClearHeld")
+    assert states["RecordClearUnconfirmed"]["Parameters"]["Payload"]["mode"] == "unconfirmed"
+    check = states["ClearStillValid"]["Parameters"]
+    assert "attribute_not_exists(alert_rank)" in check["ConditionExpression"]
+    assert {c["Next"] for c in states["ClearStillValid"]["Catch"]} == {"RecordSuperseded", "MarkClearUnconfirmed"}
+    # All-clears skip the de-duplication gate entirely.
+    assert "Gate" not in reachable(states, "RequestClearApproval")

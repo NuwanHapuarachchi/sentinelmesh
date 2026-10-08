@@ -123,3 +123,31 @@ def test_test_zone_changes_do_not_refresh_the_public_map(stack, scorer):
     scorer.handler({"Records": [record("T01", 1, source_class="gauge", level_m=gauge_level(stack, "T01", 0.8))]}, None)
     assert state(stack, "T01")["tier"] == "watch"
     assert scorer.lam.invoked == []
+
+
+def winding_down(stack, zone_id, last_alert_id=None):
+    """A zone at advisory whose evidence has gone and whose hold-down has already elapsed."""
+    doc = {"ev": {}, "last_seen": {}, "gauge_hist": [], "reports": [], "score_hist": [],
+           "pending_down_since": time.time() - 700, "episode": 1, "episode_started": 123}
+    item = {"zone_id": zone_id, "tier": "advisory", "version": 1, "doc": json.dumps(doc), "alert_rank": 2}
+    if last_alert_id:
+        item["last_alert_id"] = last_alert_id
+    stack.table("zone-state").put_item(Item=item)
+
+
+def test_an_alerted_zone_winding_down_asks_for_an_all_clear(stack, scorer):
+    winding_down(stack, "Z07", last_alert_id="SM-20261008-Z07-ABC123")
+    scorer.handler({"mode": "watchdog"}, None)
+    st = state(stack, "Z07")
+    assert st["tier"] == "normal" and "last_alert_id" not in st and "alert_rank" not in st
+    [(name, payload)] = scorer.sfn.started
+    assert name == "Z07-clear-e1-123"
+    assert payload["tier"] == "clear" and payload["references"] == ["SM-20261008-Z07-ABC123"]
+    assert payload["approval_timeout_s"] == 600  # twice the zone's 300 s approval window
+
+
+def test_no_all_clear_when_no_alert_went_out(stack, scorer):
+    winding_down(stack, "Z07")
+    scorer.handler({"mode": "watchdog"}, None)
+    assert state(stack, "Z07")["tier"] == "normal"
+    assert scorer.sfn.started == []

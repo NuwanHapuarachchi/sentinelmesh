@@ -1,14 +1,121 @@
 {
-  "Comment": "SentinelMesh escalation for cell ${cell}: de-duplicate, approve warnings (timeout issues anyway), issue, enqueue by tier, notify officers.",
+  "Comment": "SentinelMesh escalation for cell ${cell}: de-duplicate, approve warnings (timeout issues anyway), issue, enqueue by tier, notify officers. All-clears need an officer (timeout sends nothing).",
   "StartAt": "RankTier",
   "States": {
     "RankTier": {
       "Type": "Choice",
       "Choices": [
+        { "Variable": "$.tier", "StringEquals": "clear", "Next": "RequestClearApproval" },
         { "Variable": "$.tier", "StringEquals": "imminent", "Next": "RankImminent" },
         { "Variable": "$.tier", "StringEquals": "warning", "Next": "RankWarning" }
       ],
       "Default": "RankAdvisory"
+    },
+    "RequestClearApproval": {
+      "Comment": "An all-clear needs an officer. Fail toward staying alerted: a timeout or any failure here sends nothing and the earlier alert stays in force.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "${approvals_fn_arn}",
+        "Payload": {
+          "op": "approval_request",
+          "token.$": "$$.Task.Token",
+          "approval_id.$": "$$.Execution.Name",
+          "input.$": "$"
+        }
+      },
+      "TimeoutSecondsPath": "$.approval_timeout_s",
+      "ResultPath": "$.approval",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.approval_error", "Next": "MarkClearUnconfirmed" }],
+      "Next": "ClearDecision"
+    },
+    "ClearDecision": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.approval.decision", "StringEquals": "reject", "Next": "RecordClearHeld" }],
+      "Default": "ClearStillValid"
+    },
+    "ClearStillValid": {
+      "Comment": "Send the all-clear only if the zone is still calm: below advisory and no new alert in progress.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${zone_state_table}",
+        "Key": { "zone_id": { "S.$": "$.zone_id" } },
+        "UpdateExpression": "SET clear_confirmed_at = :t",
+        "ConditionExpression": "attribute_not_exists(alert_rank) AND (attribute_not_exists(tier) OR tier IN (:normal, :watch))",
+        "ExpressionAttributeValues": {
+          ":t": { "S.$": "$$.State.EnteredTime" },
+          ":normal": { "S": "normal" },
+          ":watch": { "S": "watch" }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "ResultPath": null, "Next": "RecordSuperseded" },
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.check_error", "Next": "MarkClearUnconfirmed" }
+      ],
+      "Next": "Issue"
+    },
+    "RecordClearHeld": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${issuer_fn_arn}",
+        "Payload": {
+          "op": "record",
+          "mode": "rejected",
+          "execution.$": "$$.Execution.Name",
+          "entered.$": "$$.State.EnteredTime",
+          "input.$": "$",
+          "approval.$": "$.approval"
+        }
+      },
+      "ResultPath": null,
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "BackoffRate": 2, "MaxAttempts": 3 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": null, "Next": "Done" }],
+      "Next": "Done"
+    },
+    "MarkClearUnconfirmed": {
+      "Type": "Pass",
+      "Parameters": { "decision": "timeout", "approval_id.$": "$$.Execution.Name" },
+      "ResultPath": "$.approval",
+      "Next": "RecordClearUnconfirmed"
+    },
+    "RecordClearUnconfirmed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${issuer_fn_arn}",
+        "Payload": {
+          "op": "record",
+          "mode": "unconfirmed",
+          "execution.$": "$$.Execution.Name",
+          "entered.$": "$$.State.EnteredTime",
+          "input.$": "$",
+          "approval.$": "$.approval"
+        }
+      },
+      "ResultPath": null,
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "BackoffRate": 2, "MaxAttempts": 3 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": null, "Next": "IsTestClear" }],
+      "Next": "IsTestClear"
+    },
+    "IsTestClear": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.is_test", "BooleanEquals": true, "Next": "Done" }],
+      "Default": "NotifyClearUnconfirmed"
+    },
+    "NotifyClearUnconfirmed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${officers_topic_arn}",
+        "Subject": "SentinelMesh: all-clear NOT sent - alert still in force",
+        "Message.$": "States.Format('Nobody confirmed the all-clear for zone {} in time, so none was sent and the earlier alert stays in force. Issue an all-clear manually when it is safe.', $.zone_id)"
+      },
+      "ResultPath": null,
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": null, "Next": "Done" }],
+      "Next": "Done"
     },
     "RankImminent": { "Type": "Pass", "Result": "4", "ResultPath": "$.rank", "Next": "Gate" },
     "RankWarning": { "Type": "Pass", "Result": "3", "ResultPath": "$.rank", "Next": "Gate" },

@@ -110,3 +110,12 @@ def test_expired_and_superseded_reports_superseded(stack, approvals):
     approvals.sfn = SupersedingSfn(stack.table("approvals"), "Z07-warning-e1-100", error="TaskTimedOut")
     status, body = decide(approvals, "Z07-warning-e1-100", "approve")
     assert status == 409 and body["status"] == "SUPERSEDED"
+
+
+def test_all_clear_requests_are_listed_like_warnings(stack, approvals):
+    approvals.handler({
+        "op": "approval_request", "token": "tok-c", "approval_id": "Z07-clear-e1-1",
+        "input": {"zone_id": "Z07", "tier": "clear", "hazard": "flood", "approval_timeout_s": 600, "score": 0.1},
+    }, None)
+    items = json.loads(approvals.handler(api_event("GET", "/approvals", groups="duty_officer"), None)["body"])["approvals"]
+    assert [(i["approval_id"], i["tier"]) for i in items] == [("Z07-clear-e1-1", "clear")]

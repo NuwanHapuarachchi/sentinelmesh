@@ -178,3 +178,37 @@ def test_standby_cell_scores_a_zone_it_adopts(aws, publish, reset_zone):
     assert wait_for(lambda: aws["ddb"].Table("sentinelmesh-c-observations").query(
         KeyConditionExpression=Key("zone_id").eq("T01") & Key("sk").gt(str(since_ms)))["Items"])
     wait_for(lambda: state(aws, "T01").get("eval_cell") == "c")
+
+
+def test_all_clear_goes_out_only_after_an_officer_confirms(aws, publish, reset_zone, subscriber):
+    reset_zone("T02", owner="a")  # test zone: 20 s hold-down, 2 x 20 s all-clear window
+    sid = subscriber("T02")
+    since = time.time()
+    publish("T02", "gauge", level_m=gauge_level(aws, "T02", 0.8))
+    publish("T02", "forecast", fc_rain_24h_mm=90)
+    first = wait_for(lambda: [a for a in alerts_for(aws, "T02", since) if a["tier"] in ("advisory", "warning")], timeout=120)[0]
+
+    # The water goes down; after the hold-down the zone falls below advisory and an all-clear is requested.
+    publish("T02", "gauge", level_m=1.0)
+    publish("T02", "forecast", fc_rain_24h_mm=0)
+    approvals = table(aws, "approvals")
+    pending = wait_for(lambda: [
+        a for a in approvals.query(IndexName="pending", KeyConditionExpression=Key("pending").eq("PENDING"))["Items"]
+        if a["zone_id"] == "T02" and a["tier"] == "clear"
+    ], timeout=180, every=5)[0]
+    assert not [a for a in alerts_for(aws, "T02", since) if a["tier"] == "clear"], "nothing is sent before confirmation"
+
+    event = {
+        "httpMethod": "POST", "pathParameters": {"id": pending["approval_id"]},
+        "body": json.dumps({"decision": "approve", "note": "e2e all-clear"}),
+        "requestContext": {"authorizer": {"claims": {"cognito:groups": "duty_officer", "email": "e2e@test"}}},
+    }
+    aws["lambda"].invoke(FunctionName="sentinelmesh-approvals", Payload=json.dumps(event))
+
+    clear = wait_for(lambda: [a for a in alerts_for(aws, "T02", since) if a["tier"] == "clear"])[0]
+    assert clear["status"] == "Test" and clear["mode"] == "approve"
+    bucket = f"sentinelmesh-web-{aws['s'].client('sts').get_caller_identity()['Account']}"
+    cap_xml = aws["s3"].get_object(Bucket=bucket, Key=clear["cap_key"])["Body"].read().decode()
+    assert "<msgType>Update</msgType>" in cap_xml and first["alert_id"] in cap_xml
+    wait_for(lambda: [m for m in table(aws, "inbox").query(KeyConditionExpression=Key("subscriber_id").eq(sid))["Items"]
+                      if m["alert_id"] == clear["alert_id"]])

@@ -9,7 +9,8 @@ const store = { get: (k) => { try { return JSON.parse(localStorage.getItem(k)); 
                 set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } } };
 const HEAD = { imminent: { en: "Emergency alert", si: "හදිසි අනතුරු ඇඟවීම", ta: "அவசர எச்சரிக்கை" },
                warning: { en: "Warning", si: "අනතුරු ඇඟවීම", ta: "எச்சரிக்கை" },
-               advisory: { en: "Advisory", si: "දැනුම්දීම", ta: "அறிவிப்பு" } };
+               advisory: { en: "Advisory", si: "දැනුම්දීම", ta: "அறிவிப்பு" },
+               clear: { en: "All clear", si: "අවදානම අවසන්", ta: "அபாயம் நீங்கியது" } };
 const BROADCAST_MAX_AGE_S = 6 * 3600; // CAP alerts expire after 6 hours; older broadcasts are not shown
 let cfg, geo, me = store.get("sm-phone"), seen = new Set(store.get("sm-seen") || []);
 let shown = new Set(store.get("sm-shown") || []), broadcasts = store.get("sm-cb") || [], inbox = [];

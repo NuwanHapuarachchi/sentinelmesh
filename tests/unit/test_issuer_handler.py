@@ -159,3 +159,12 @@ def test_unconfirmed_all_clear_expires_its_approval(stack, issuer):
     assert stack.table("approvals").get_item(Key={"approval_id": "C1"})["Item"]["status"] == "EXPIRED"
     [key] = stack.keys("DECISIONS_BUCKET", "decisions/")
     assert json.loads(stack.body("DECISIONS_BUCKET", key))["mode"] == "unconfirmed"
+
+
+def test_an_exercises_all_clear_is_an_exercise_for_the_same_hazard(stack, issuer):
+    first = issue(issuer, {**bypass_input("Z07"), "drill": True, "hazard": "landslide"})
+    assert alert_item(stack, first["alert_id"])["status"] == "Exercise"
+    inp = {**bypass_input("Z07"), "tier": "clear", "hazard": "flood", "references": [first["alert_id"]]}
+    out = issuer.handler({"op": "issue", "input": inp, "approval": {"decision": "approve"}, "execution": "c1"}, None)
+    item = alert_item(stack, out["alert_id"])
+    assert (item["status"], item["hazard"]) == ("Exercise", "landslide")

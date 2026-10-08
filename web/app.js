@@ -1,7 +1,7 @@
 // SentinelMesh officer console. Public visitors see zone levels only; signed-in officers see evidence,
 // approvals, drills and failover. Field filtering happens in the API, not here.
 const TIERS = ["normal", "watch", "advisory", "warning", "imminent"];
-const TIER_LABEL = { normal: "Normal", watch: "Watch", advisory: "Advisory", warning: "Warning", imminent: "Imminent", blind: "Blind (sensors silent)" };
+const TIER_LABEL = { normal: "Normal", watch: "Watch", advisory: "Advisory", warning: "Warning", imminent: "Imminent", blind: "Blind (sensors silent)", clear: "All clear" };
 const COLORS = { normal: "#c9d6dc", watch: "#e7c84b", advisory: "#e8913a", warning: "#d14b3d", imminent: "#7d1220", blind: "#6b5ca5" };
 
 let cfg, geo, map, layers = {}, zones = {}, officer = false, selected = null;
@@ -131,6 +131,15 @@ async function loadApprovals() {
   $("approvals").innerHTML = approvals.length
     ? approvals.map((a) => {
         const s = JSON.parse(a.summary || "{}");
+        if (a.tier === "clear") {
+          // All-clears fail the other way: if nobody confirms, none is sent and the alert stays in force.
+          return `<div class="entry"><div class="head"><span class="zone">${esc(a.zone_id)} all clear</span>
+            <span class="countdown">${a.seconds_left}s</span></div>
+            <p>The zone is back below advisory (score ${Number(s.score).toFixed(2)}).
+            If you don't confirm, no all-clear is sent and the earlier alert stays in force.</p>
+            <div class="actions"><button class="primary" data-approve="${esc(a.approval_id)}">Send all-clear</button>
+            <button data-reject="${esc(a.approval_id)}">Keep the alert</button></div></div>`;
+        }
         return `<div class="entry"><div class="head"><span class="zone">${esc(a.zone_id)} ${esc(a.hazard)} warning</span>
           <span class="countdown">${a.seconds_left}s</span></div>
           <p>Score ${Number(s.score).toFixed(2)}. Sources agreeing: ${esc((s.agreeing || []).join(", "))}.
@@ -157,7 +166,7 @@ function wireActions() {
     const t = e.target;
     try {
       if (t.dataset.approve || t.dataset.reject) {
-        const note = t.dataset.reject ? prompt("Why hold this warning back? This is recorded.") : "approved in console";
+        const note = t.dataset.reject ? prompt("Why hold this back? This is recorded.") : "approved in console";
         if (t.dataset.reject && !note) return;
         await api(`/approvals/${encodeURIComponent(t.dataset.approve || t.dataset.reject)}`, {
           method: "POST", body: JSON.stringify({ decision: t.dataset.approve ? "approve" : "reject", note }),
