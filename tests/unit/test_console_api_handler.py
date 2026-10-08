@@ -16,11 +16,12 @@ def call(mod, method, resource, body=None, groups="duty_officer", path=None):
     return resp["statusCode"], json.loads(resp["body"])
 
 
-def put_alert(stack, alert_id, zone_id, status="Actual"):
+def put_alert(stack, alert_id, zone_id, status="Actual", district="Ratnapura"):
     now = int(time.time())
     stack.table("alerts").put_item(Item={
         "alert_id": alert_id, "sk": "META", "day": datetime.fromtimestamp(now, UTC).strftime("%Y%m%d"),
-        "issued_at": now, "zone_id": zone_id, "tier": "imminent", "status": status,
+        "issued_at": now, "zone_id": zone_id, "tier": "imminent", "status": status, "district": district,
+        "sent": 10, "delivered": 9, "mode": "auto",
     })
 
 
@@ -43,7 +44,7 @@ def test_viewer_sees_counts_only(stack, console):
     put_alert(stack, "A-real", "Z07")
     stack.table("zone-state").put_item(Item={"zone_id": "Z07", "tier": "warning", "score": 1, "doc": "{}"})
     _, alerts = call(console, "GET", "/alerts", groups="viewer")
-    assert alerts == {"count": 1}
+    assert alerts == {"count": 1, "districts": {"Ratnapura": {"imminent": 1}}}
     _, zones = call(console, "GET", "/zones", groups="viewer")
     assert set(zones) == {"districts"}
     assert zones["districts"]["Ratnapura"]["warning"] == 1
@@ -94,3 +95,63 @@ def test_restore_with_nothing_moved_invokes_nothing(stack, console):
     console.lam = FakeLambda()
     status, body = call(console, "POST", "/cells/{cell}/restore", path={"cell": "b"})
     assert status == 200 and body["zones_moved"] == 0 and console.lam.invoked == []
+
+
+
+def call_as(mod, role, resource, district=None):
+    event = api_event("GET", resource, groups=role)
+    if district:
+        event["requestContext"]["authorizer"]["claims"]["custom:district"] = district
+    resp = mod.handler(event, None)
+    return resp["statusCode"], json.loads(resp["body"])
+
+
+@pytest.fixture
+def scored(stack):
+    for zid in ("Z07", "Z35"):  # Z07 is in Ratnapura, Z35 in Kegalle
+        stack.table("zone-state").put_item(Item={"zone_id": zid, "tier": "warning", "score": 1, "blind": False,
+                                                 "doc": json.dumps({"ev": {"gauge": {"value": 4}}, "reason": "corroborated"})})
+    put_alert(stack, "A-rat", "Z07", district="Ratnapura")
+    put_alert(stack, "A-keg", "Z35", district="Kegalle")
+
+
+def test_duty_officer_and_met_see_evidence_but_met_sees_no_people_counts(stack, console, scored):
+    for role in ("duty_officer", "met"):
+        _, body = call_as(console, role, "/zones")
+        z07 = next(z for z in body["zones"] if z["zone_id"] == "Z07")
+        assert set(z07) == set(console.ZONE_FIELDS[role]) and z07["evidence"] == {"gauge": {"value": 4}}
+    _, officer = call_as(console, "duty_officer", "/alerts")
+    _, met = call_as(console, "met", "/alerts")
+    assert {"sent", "delivered"} <= set(officer["alerts"][0])
+    assert not {"sent", "delivered", "first_receipt_ms"} & set(met["alerts"][0])
+
+
+def test_ems_sees_only_its_district_without_evidence(stack, console, scored):
+    _, zones = call_as(console, "ems", "/zones", district="Kegalle")
+    assert {z["district"] for z in zones["zones"]} == {"Kegalle"}
+    assert set(zones["zones"][0]) == set(console.ZONE_FIELDS["ems"]) and "evidence" not in zones["zones"][0]
+    _, alerts = call_as(console, "ems", "/alerts", district="Kegalle")
+    assert [a["alert_id"] for a in alerts["alerts"]] == ["A-keg"] and alerts["alerts"][0]["delivered"] == 9
+
+
+def test_ems_without_a_district_is_refused(stack, console, scored):
+    assert call_as(console, "ems", "/zones")[0] == 403
+
+
+def test_ngo_sees_only_counts(stack, console, scored):
+    _, zones = call_as(console, "ngo", "/zones")
+    _, alerts = call_as(console, "ngo", "/alerts")
+    assert set(zones) == {"districts"} and zones["districts"]["Kegalle"]["warning"] == 1
+    assert alerts == {"count": 2, "districts": {"Ratnapura": {"imminent": 1}, "Kegalle": {"imminent": 1}}}
+
+
+@pytest.mark.parametrize("role", ["met", "ems", "ngo", "viewer"])
+def test_only_duty_officers_act(stack, console, role):
+    event = api_event("POST", "/cells/{cell}/failover", groups=role, path={"cell": "a"})
+    event["requestContext"]["authorizer"]["claims"]["custom:district"] = "Kegalle"
+    assert console.handler(event, None)["statusCode"] == 403
+
+
+def test_the_most_capable_group_wins(stack, console, scored):
+    _, body = call_as(console, "viewer,duty_officer", "/zones")
+    assert "zones" in body and "evidence" in body["zones"][0]

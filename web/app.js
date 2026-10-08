@@ -1,10 +1,16 @@
-// SentinelMesh officer console. Public visitors see zone levels only; signed-in officers see evidence,
-// approvals, drills and failover. Field filtering happens in the API, not here.
+// SentinelMesh agency console. Public visitors see zone levels only. Signed in, each agency sees what its job
+// needs: duty officers and meteorology see evidence, emergency services see their own district, NGOs see
+// counts; only duty officers approve, run drills and fail cells over. Field filtering happens in the API
+// (console_api), not here; this page just renders whatever the API returns.
 const TIERS = ["normal", "watch", "advisory", "warning", "imminent"];
 const TIER_LABEL = { normal: "Normal", watch: "Watch", advisory: "Advisory", warning: "Warning", imminent: "Imminent", blind: "Blind (sensors silent)", clear: "All clear" };
 const COLORS = { normal: "#c9d6dc", watch: "#e7c84b", advisory: "#e8913a", warning: "#d14b3d", imminent: "#7d1220", blind: "#6b5ca5" };
 
-let cfg, geo, map, layers = {}, zones = {}, officer = false, selected = null;
+const ROLES = ["duty_officer", "met", "ems", "ngo", "viewer"]; // most capable first, as in the API
+const ROLE_LABEL = { duty_officer: "duty officer", met: "meteorology", ems: "emergency services", ngo: "NGO", viewer: "viewer" };
+const DETAILED = ["duty_officer", "met", "ems"]; // roles the API gives per-zone rows and an alert list
+
+let cfg, geo, map, layers = {}, zones = {}, role = null, officer = false, selected = null;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -24,9 +30,11 @@ async function boot() {
   await Auth.init(cfg);
   const claims = Auth.claims();
   const groups = claims?.["cognito:groups"] || [];
-  officer = groups.includes("duty_officer");
+  role = ROLES.find((r) => groups.includes(r)) || null;
+  officer = role === "duty_officer";
   if (claims) {
-    $("who").textContent = `${claims.email} · ${officer ? "duty officer" : "viewer"}`;
+    const district = claims["custom:district"] ? ` · ${claims["custom:district"]}` : "";
+    $("who").textContent = `${claims.email} · ${ROLE_LABEL[role] || "no SentinelMesh role"}${district}`;
     $("login").hidden = true;
     $("logout").hidden = false;
   }
@@ -79,13 +87,15 @@ async function publicZones() {
 
 async function refresh() {
   try {
-    const data = officer ? await api("/zones") : await publicZones();
+    const data = DETAILED.includes(role) ? await api("/zones") : await publicZones();
     const list = data.zones || [];
     zones = Object.fromEntries(list.map((z) => [z.zone_id, z]));
     paint();
     $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}. Refreshes every 4 seconds.`;
     if (selected) selectZone(selected, true);
-    if (officer) await Promise.all([loadApprovals(), loadAlerts()]);
+    if (officer) await loadApprovals();
+    if (DETAILED.includes(role)) await loadAlerts();
+    else if (role) await loadAlertCounts();
   } catch (e) {
     $("updated").textContent = `Couldn't load zones: ${e.message}. Retrying.`;
   }
@@ -96,9 +106,11 @@ function levelOf(z) { return z?.blind ? "blind" : z?.tier || "normal"; }
 function paint() {
   const counts = Object.fromEntries([...TIERS, "blind"].map((t) => [t, 0]));
   for (const [id, layer] of Object.entries(layers)) {
+    // Emergency services only receive their own district's zones; the rest are drawn faint, not "normal".
+    const outside = role === "ems" && !zones[id];
     const level = levelOf(zones[id]);
-    counts[level] += 1;
-    layer.setStyle({ fillColor: COLORS[level], weight: id === selected ? 3 : 1 });
+    if (!outside) counts[level] += 1;
+    layer.setStyle({ fillColor: COLORS[level], fillOpacity: outside ? 0.12 : 0.75, weight: id === selected ? 3 : 1 });
     const el = layer.getElement?.();
     if (el) el.classList.toggle("pulse", level === "imminent");
   }
@@ -155,10 +167,18 @@ async function loadAlerts() {
   $("alerts").innerHTML = alerts.length
     ? alerts.map((a) => `<div class="entry"><div class="head"><span class="zone">${esc(a.zone_id)} · ${esc(a.zone_name)}</span>
         <span class="chip ${a.tier} tier-${a.tier}">${TIER_LABEL[a.tier]}</span></div>
-        <p>${new Date(a.issued_at * 1000).toLocaleTimeString()} · ${esc(a.status)} · ${esc(a.mode)} · sent ${a.sent}, confirmed ${a.delivered}
+        <p>${new Date(a.issued_at * 1000).toLocaleTimeString()} · ${esc(a.status)}${a.mode ? ` · ${esc(a.mode)}` : ""}${a.sent !== undefined ? ` · sent ${a.sent}, confirmed ${a.delivered}` : ""}
         ${a.first_receipt_ms ? ` · first phone reached in ${(a.first_receipt_ms / 1000).toFixed(1)} s` : ""}</p>
         <p><a href="${esc(a.cap_key)}" target="_blank" rel="noopener">CAP file</a></p></div>`).join("")
     : `<p class="muted">No alerts in the last two days. Start a drill to see the whole path.</p>`;
+}
+
+// NGOs and viewers get counts only.
+async function loadAlertCounts() {
+  const { count, districts } = await api("/alerts");
+  const rows = Object.entries(districts || {}).map(([d, tiers]) =>
+    `<p>${esc(d)}: ${Object.entries(tiers).map(([t, n]) => `${n} ${esc(TIER_LABEL[t] || t).toLowerCase()}`).join(", ")}</p>`).join("");
+  $("alerts").innerHTML = `<p>${count} alerts in the last two days.</p>${rows}`;
 }
 
 function wireActions() {

@@ -25,10 +25,14 @@ def respond(status, body):
     }
 
 
+def claims_of(event):
+    """Cognito ID-token claims from a REST API authorizer ({} without one)."""
+    return ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
+
+
 def groups_of(event):
     """Cognito groups from a REST API authorizer; the claim arrives as 'a,b' or '[a b]'."""
-    claims = ((event.get("requestContext") or {}).get("authorizer") or {}).get("claims") or {}
-    raw = claims.get("cognito:groups", "")
+    raw = claims_of(event).get("cognito:groups", "")
     if isinstance(raw, list):
         return set(raw)
     return {g for g in raw.strip("[]").replace(",", " ").split() if g}

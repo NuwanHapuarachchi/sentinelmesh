@@ -41,12 +41,17 @@ variable "rules_version" {
 }
 
 variable "officers" {
-  description = "Console users: email => group (duty_officer or viewer). Set via TF_VAR_officers in GitLab."
+  description = "Console users: email => group, or \"ems:District\" for an EMS user scoped to one district. Groups: duty_officer, met, ems, ngo, viewer. Set via TF_VAR_officers in GitLab."
   type        = map(string)
   default     = {}
 
   validation {
-    condition     = alltrue([for g in values(var.officers) : contains(["duty_officer", "viewer"], g)])
-    error_message = "Each officer's group must be duty_officer or viewer."
+    condition     = alltrue([for spec in values(var.officers) : contains(["duty_officer", "met", "ems", "ngo", "viewer"], split(":", spec)[0])])
+    error_message = "Each officer is \"group\" or \"ems:District\", with group one of duty_officer, met, ems, ngo, viewer."
+  }
+
+  validation {
+    condition     = alltrue([for spec in values(var.officers) : !startswith(spec, "ems") || can(regex("^ems:[^:]+$", spec))])
+    error_message = "An ems officer needs a district, e.g. \"ems:Ratnapura\"."
   }
 }

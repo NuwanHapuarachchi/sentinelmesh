@@ -139,6 +139,19 @@ resource "aws_cognito_user_pool" "officers" {
     require_symbols   = false
     require_uppercase = true
   }
+
+  # custom:district scopes an EMS user to one district (console_api filters by it).
+  schema {
+    name                     = "district"
+    attribute_data_type      = "String"
+    mutable                  = true
+    developer_only_attribute = false
+
+    string_attribute_constraints {
+      min_length = 0
+      max_length = 64
+    }
+  }
 }
 
 resource "aws_cognito_user_pool_domain" "officers" {
@@ -165,14 +178,23 @@ resource "aws_cognito_user_pool_client" "console" {
   }
 }
 
+# One group per agency role; services/console_api/handler.py decides what each may see.
+locals {
+  console_groups = ["duty_officer", "met", "ems", "ngo", "viewer"]
+  officer_roles = { for email, spec in var.officers : email => {
+    group    = split(":", spec)[0]
+    district = try(split(":", spec)[1], "")
+  } }
+}
+
 resource "aws_cognito_user_group" "groups" {
-  for_each     = toset(["duty_officer", "viewer"])
+  for_each     = toset(local.console_groups)
   name         = each.key
   user_pool_id = aws_cognito_user_pool.officers.id
 }
 
-# Team accounts from TF_VAR_officers = {"email": "duty_officer" | "viewer"}. The demo addresses are not
-# real inboxes, so no invite email is sent: Terraform sets a random password and stores the logins in
+# Team accounts from TF_VAR_officers = {"email": "group"} or {"email": "ems:District"}. The demo addresses are
+# not real inboxes, so no invite email is sent: Terraform sets a random password and stores the logins in
 # Secrets Manager, where the team reads them in the AWS console. They never appear in logs or chat.
 resource "random_password" "officer" {
   for_each         = var.officers
@@ -190,10 +212,10 @@ resource "aws_cognito_user" "officer" {
   username       = each.key
   password       = random_password.officer[each.key].result
   message_action = "SUPPRESS"
-  attributes = {
-    email          = each.key
-    email_verified = true
-  }
+  attributes = merge(
+    { email = each.key, email_verified = true },
+    local.officer_roles[each.key].district == "" ? {} : { district = local.officer_roles[each.key].district },
+  )
 }
 
 resource "aws_secretsmanager_secret" "officer_logins" {
@@ -204,16 +226,17 @@ resource "aws_secretsmanager_secret" "officer_logins" {
 
 resource "aws_secretsmanager_secret_version" "officer_logins" {
   secret_id = aws_secretsmanager_secret.officer_logins.id
-  secret_string = jsonencode({ for email, group in var.officers : email => {
+  secret_string = jsonencode({ for email, role in local.officer_roles : email => {
     password = random_password.officer[email].result
-    group    = group
+    group    = role.group
+    district = role.district
   } })
 }
 
 resource "aws_cognito_user_in_group" "officer" {
   for_each     = var.officers
   user_pool_id = aws_cognito_user_pool.officers.id
-  group_name   = aws_cognito_user_group.groups[each.value].name
+  group_name   = aws_cognito_user_group.groups[local.officer_roles[each.key].group].name
   username     = aws_cognito_user.officer[each.key].username
 }
 
