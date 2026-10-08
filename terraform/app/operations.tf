@@ -433,6 +433,7 @@ resource "aws_glue_catalog_table" "observations" {
         zone_id        = "string", sk = "string", rx_ms = "bigint", source_class = "string", source_id = "string",
         ts             = "double", drill = "boolean", level_m = "double", rain_24h_mm = "double", tilt_deg = "double",
         fc_rain_24h_mm = "double", report_kind = "string", report_sev = "int", principal = "string",
+        reporter_hash  = "string",
       }
       content {
         name = columns.key

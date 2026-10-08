@@ -88,6 +88,12 @@ Demo ("cut the cloud"), all on one phone hotspot:
 4. Turn phone A's mobile data off: the LAN still works, the internet is gone. The node shows the cloud as unreachable and issues on the surge; SMS go out from phone A's SIM and phones on the hotspot opening `http://<laptop>:8080/phone.html` get the broadcast.
 5. Turn mobile data back on: the node uploads its decision records into the cloud chain.
 
+## Operations tools
+
+- **GameDay** (manual CI job `gameday`, or `python scripts/gameday.py`): loses cell A for real (stream consumers and IoT rules off), proves no alert gets through, fails over to standby C, times the first alert from C, and always restores. `GAMEDAY_SCOPE=cell` moves the whole cell's zones.
+- **Decision chain** (manual CI job `verify-decisions`): walks the hash chain over every decision record and fails on any edit, deletion or gap.
+- **Replay** (`python scripts/replay.py --zone Z07 --athena --since ... --until ...`, or `--file series.csv` for a historical series): re-runs the scoring rules over recorded observations and prints the tier timeline; `--set ENTER.warning=0.6` tries a rule change on real history before committing it.
+
 ## Teardown after the competition
 
 1. Run `stack=app`, `action=destroy`. The `verify-teardown` job must pass.
