@@ -1,7 +1,9 @@
 """Issuer: called by the escalation workflow.
 
 op=issue  -> alert id, CAP 1.2 file, alert record, decision record, message for the tier queue.
-op=record -> decision record only (rejected warnings).
+op=record -> decision record only, for a warning that was not issued:
+             mode=rejected   (an officer held it back)
+             mode=superseded (a higher tier was issued, or the zone fell below advisory, while it waited)
 
 Decision records are write-once: the bucket policy rejects any PutObject without If-None-Match.
 Environment: ALERTS_TABLE, APPROVALS_TABLE, ZONES_TABLE, WEB_BUCKET, DECISIONS_BUCKET, CELL,
@@ -28,11 +30,20 @@ alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 approvals = ddb.Table(os.environ["APPROVALS_TABLE"])
 zones = ddb.Table(os.environ["ZONES_TABLE"])
 QUEUES = {t: os.environ[f"QUEUE_{t.upper()}"] for t in ("imminent", "warning", "advisory")}
+# Approval states the workflow may still move an approval out of (an officer may be mid-decision).
+OPEN = ("PENDING", "DECIDING")
 
 
 def handler(event, context):
     if event.get("op") == "record":
-        return record_decision(event["input"], mode="rejected", approval=event.get("approval"))
+        mode = event.get("mode", "rejected")
+        if mode not in ("rejected", "superseded"):
+            raise ValueError(f"unknown record mode {mode!r}")
+        approval = event.get("approval") or {}
+        if mode == "superseded":
+            # An approved warning can still be superseded before it issues, so APPROVED moves too.
+            settle_approval(approval.get("approval_id"), "SUPERSEDED", (*OPEN, "APPROVED"))
+        return record_decision(event["input"], mode=mode, approval=approval)
     return issue(event["input"], event.get("approval") or {})
 
 
@@ -65,7 +76,7 @@ def issue(inp, approval):
         "texts": texts, "origin": inp.get("origin", "scorer"), "sent": 0, "delivered": 0,
     })
     if tier == "warning" and mode == "timeout":
-        mark_auto_issued(approval.get("approval_id") or inp.get("approval_id"))
+        settle_approval(approval.get("approval_id") or inp.get("approval_id"), "AUTO_ISSUED", OPEN)
     record_decision(inp, mode=mode, approval=approval, alert_id=alert_id, cap_sha=cap_sha)
 
     lag_ms = now * 1000 - int(inp.get("trigger_rx_ms") or now * 1000)
@@ -81,16 +92,18 @@ def issue(inp, approval):
             "summary": summary, "is_test": is_test}
 
 
-def mark_auto_issued(approval_id):
+def settle_approval(approval_id, status, from_statuses):
+    """Move an approval to its final status if it is still in one of from_statuses (race-safe with officers)."""
     if not approval_id:
         return
+    names = {f":f{i}": s for i, s in enumerate(from_statuses)}
     try:
         approvals.update_item(
             Key={"approval_id": approval_id},
-            UpdateExpression="SET #s = :a REMOVE pending",
-            ConditionExpression="#s = :p",
+            UpdateExpression="SET #s = :new REMOVE pending",
+            ConditionExpression=f"#s IN ({', '.join(names)})",
             ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":a": "AUTO_ISSUED", ":p": "PENDING"},
+            ExpressionAttributeValues={":new": status, **names},
         )
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":

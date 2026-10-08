@@ -20,7 +20,7 @@
       "Parameters": {
         "TableName": "${zone_state_table}",
         "Key": { "zone_id": { "S.$": "$.zone_id" } },
-        "UpdateExpression": "SET alert_rank = :r, alert_tier = :t, alert_exec = :e",
+        "UpdateExpression": "SET alert_rank = :r, alert_tier = :t, alert_exec = :e REMOVE alert_confirmed_at",
         "ConditionExpression": "attribute_not_exists(alert_rank) OR alert_rank < :r",
         "ExpressionAttributeValues": {
           ":r": { "N.$": "$.rank" },
@@ -79,19 +79,54 @@
       "Type": "Pass",
       "Parameters": { "decision": "timeout", "approval_id.$": "$$.Execution.Name" },
       "ResultPath": "$.approval",
-      "Next": "Issue"
+      "Next": "StillCurrent"
     },
     "Decision": {
       "Type": "Choice",
       "Choices": [{ "Variable": "$.approval.decision", "StringEquals": "reject", "Next": "RecordReject" }],
-      "Default": "Issue"
+      "Default": "StillCurrent"
     },
+    "StillCurrent": {
+      "Comment": "After waiting for an officer, issue only if this execution still owns the zone's alert gate. A higher tier issued meanwhile, or the zone falling below advisory, supersedes this warning. Any other failure of the check issues anyway (fail toward alerting).",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${zone_state_table}",
+        "Key": { "zone_id": { "S.$": "$.zone_id" } },
+        "UpdateExpression": "SET alert_confirmed_at = :t",
+        "ConditionExpression": "alert_exec = :e",
+        "ExpressionAttributeValues": {
+          ":e": { "S.$": "$$.Execution.Name" },
+          ":t": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        { "ErrorEquals": ["DynamoDB.ConditionalCheckFailedException"], "ResultPath": null, "Next": "RecordSuperseded" },
+        { "ErrorEquals": ["States.ALL"], "ResultPath": "$.check_error", "Next": "Issue" }
+      ],
+      "Next": "Issue"
+    },
+    "RecordSuperseded": {
+      "Comment": "The newer alert owns the gate, so it is not released here.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${issuer_fn_arn}",
+        "Payload": { "op": "record", "mode": "superseded", "execution.$": "$$.Execution.Name", "input.$": "$", "approval.$": "$.approval" }
+      },
+      "ResultPath": null,
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 1, "BackoffRate": 2, "MaxAttempts": 3 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": null, "Next": "Superseded" }],
+      "Next": "Superseded"
+    },
+    "Superseded": { "Type": "Succeed" },
     "RecordReject": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "Parameters": {
         "FunctionName": "${issuer_fn_arn}",
-        "Payload": { "op": "record", "input.$": "$", "approval.$": "$.approval" }
+        "Payload": { "op": "record", "mode": "rejected", "execution.$": "$$.Execution.Name", "input.$": "$", "approval.$": "$.approval" }
       },
       "ResultPath": null,
       "Next": "ReleaseGate"
@@ -103,7 +138,7 @@
       "Parameters": {
         "TableName": "${zone_state_table}",
         "Key": { "zone_id": { "S.$": "$.zone_id" } },
-        "UpdateExpression": "REMOVE alert_rank, alert_tier, alert_exec"
+        "UpdateExpression": "REMOVE alert_rank, alert_tier, alert_exec, alert_confirmed_at"
       },
       "ResultPath": null,
       "End": true
@@ -180,7 +215,7 @@
       "Parameters": {
         "TableName": "${zone_state_table}",
         "Key": { "zone_id": { "S.$": "$.zone_id" } },
-        "UpdateExpression": "REMOVE alert_rank, alert_tier, alert_exec"
+        "UpdateExpression": "REMOVE alert_rank, alert_tier, alert_exec, alert_confirmed_at"
       },
       "ResultPath": null,
       "Next": "Failed"

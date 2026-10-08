@@ -59,3 +59,46 @@ def test_test_alerts_skip_the_officer_email(machine):
     choice = states["IsTestAlert"]
     assert choice["Choices"] == [{"Variable": "$.issue.is_test", "BooleanEquals": True, "Next": "Done"}]
     assert choice["Default"] == "NotifyOfficers"
+
+
+def reachable(states, start, blocked=()):
+    seen, todo = set(), [start]
+    while todo:
+        name = todo.pop()
+        if name in seen or name in blocked:
+            continue
+        seen.add(name)
+        todo += targets(states[name])
+    return seen
+
+
+def test_a_warning_that_waited_for_an_officer_is_rechecked_before_issuing(machine):
+    states = machine["States"]
+    assert states["MarkTimeout"]["Next"] == "StillCurrent"
+    assert states["Decision"]["Default"] == "StillCurrent"
+    # No route from the approval wait reaches Issue except through the ownership check.
+    assert "Issue" not in reachable(states, "RequestApproval", blocked={"StillCurrent"})
+    check = states["StillCurrent"]
+    assert check["Parameters"]["ConditionExpression"] == "alert_exec = :e"
+    assert check["Parameters"]["ExpressionAttributeValues"][":e"] == {"S.$": "$$.Execution.Name"}
+    catches = {c["ErrorEquals"][0]: c["Next"] for c in check["Catch"]}
+    assert catches == {"DynamoDB.ConditionalCheckFailedException": "RecordSuperseded", "States.ALL": "Issue"}
+
+
+def test_a_superseded_warning_is_recorded_and_keeps_the_newer_gate(machine):
+    states = machine["States"]
+    payload = states["RecordSuperseded"]["Parameters"]["Payload"]
+    assert payload["op"] == "record" and payload["mode"] == "superseded"
+    after = reachable(states, "RecordSuperseded")
+    assert after == {"RecordSuperseded", "Superseded"}
+    assert states["Superseded"]["Type"] == "Succeed"
+    releases = {n for n, s in states.items() if s.get("Parameters", {}).get("UpdateExpression", "").startswith("REMOVE alert_rank")}
+    assert releases == {"ReleaseGate", "ReleaseAfterFailure"} and not releases & after
+
+
+def test_gate_and_releases_clear_the_confirmation_marker(machine):
+    states = machine["States"]
+    assert states["Gate"]["Parameters"]["UpdateExpression"].endswith("REMOVE alert_confirmed_at")
+    for name in ("ReleaseGate", "ReleaseAfterFailure"):
+        assert "alert_confirmed_at" in states[name]["Parameters"]["UpdateExpression"]
+    assert states["RecordReject"]["Parameters"]["Payload"]["mode"] == "rejected"

@@ -100,12 +100,23 @@ def decide(event):
         sfn.send_task_success(taskToken=item["task_token"], output=json.dumps(output))
     except ClientError as exc:
         if exc.response["Error"]["Code"] in ("TaskTimedOut", "TaskDoesNotExist", "InvalidToken"):
-            approvals.update_item(Key={"approval_id": approval_id}, UpdateExpression="SET #s = :a",
-                                  ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":a": "AUTO_ISSUED"})
-            return respond(409, {"error": "approval window expired; the alert was issued automatically"})
+            status = finish(approval_id, "AUTO_ISSUED")
+            return respond(409, {"error": "approval window expired; the workflow already acted", "status": status})
         raise
-    approvals.update_item(Key={"approval_id": approval_id}, UpdateExpression="SET #s = :d",
-                          ExpressionAttributeNames={"#s": "status"},
-                          ExpressionAttributeValues={":d": "APPROVED" if decision == "approve" else "REJECTED"})
-    log("approval_decided", approval_id=approval_id, decision=decision, officer=officer)
-    return respond(200, {"approval_id": approval_id, "decision": decision})
+    status = finish(approval_id, "APPROVED" if decision == "approve" else "REJECTED")
+    log("approval_decided", approval_id=approval_id, decision=decision, officer=officer, status=status)
+    return respond(200, {"approval_id": approval_id, "decision": decision, "status": status})
+
+
+def finish(approval_id, status):
+    """Set the final status unless the workflow already settled it (e.g. SUPERSEDED by a higher tier).
+    Returns the status the approval ends with."""
+    try:
+        approvals.update_item(Key={"approval_id": approval_id}, UpdateExpression="SET #s = :n",
+                              ConditionExpression="#s = :deciding", ExpressionAttributeNames={"#s": "status"},
+                              ExpressionAttributeValues={":n": status, ":deciding": "DECIDING"})
+        return status
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        return approvals.get_item(Key={"approval_id": approval_id}, ConsistentRead=True)["Item"]["status"]

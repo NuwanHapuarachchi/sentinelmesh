@@ -87,6 +87,31 @@ def test_unanswered_warning_is_issued_after_timeout(aws, publish, reset_zone):
     assert alert["mode"] == "timeout"
 
 
+def test_waiting_warning_is_superseded_by_imminent(aws, publish, reset_zone):
+    # A warning waits for an officer; meanwhile the river passes the danger level and imminent is issued.
+    # When the approval window closes, the stale warning must not go out after the emergency.
+    reset_zone("T01", owner="a")  # T01's approval window is 60 s
+    since = time.time()
+    publish("T01", "gauge", level_m=gauge_level(aws, "T01", 0.8))
+    publish("T01", "forecast", fc_rain_24h_mm=90)
+    report(publish, "T01", 2)
+    wait_for(lambda: state(aws, "T01").get("tier") == "warning")
+    approvals = table(aws, "approvals")
+    pending = wait_for(lambda: [
+        a for a in approvals.query(IndexName="pending", KeyConditionExpression=Key("pending").eq("PENDING"))["Items"]
+        if a["zone_id"] == "T01"
+    ])[0]
+
+    publish("T01", "gauge", level_m=float(zone_cfg(aws, "T01")["danger_level_m"]) + 0.2)
+    wait_for(lambda: [a for a in alerts_for(aws, "T01", since) if a["tier"] == "imminent"])
+
+    settled = wait_for(lambda: (i := approvals.get_item(Key={"approval_id": pending["approval_id"]})["Item"])["status"] != "PENDING"
+                       and i, timeout=120)
+    assert settled["status"] == "SUPERSEDED"
+    time.sleep(5)
+    assert not [a for a in alerts_for(aws, "T01", since) if a["tier"] == "warning"]
+
+
 def test_bypass_issues_imminent_when_scorer_is_off(aws, publish, reset_zone, outputs):
     reset_zone("T03", owner="b")
     lam = aws["lambda"]

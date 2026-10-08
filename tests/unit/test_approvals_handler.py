@@ -82,3 +82,31 @@ def test_expired_token_marks_auto_issued(stack, approvals):
     assert status == 409
     item = stack.table("approvals").get_item(Key={"approval_id": "Z07-warning-e1-100"})["Item"]
     assert item["status"] == "AUTO_ISSUED"
+
+
+class SupersedingSfn(FakeSfn):
+    """The workflow supersedes the warning (issuer settles it) while the officer's approval is in flight."""
+
+    def __init__(self, table, approval_id, error=None):
+        super().__init__(error)
+        self.table, self.approval_id = table, approval_id
+
+    def send_task_success(self, taskToken, output):
+        self.table.update_item(Key={"approval_id": self.approval_id}, UpdateExpression="SET #s = :s",
+                               ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":s": "SUPERSEDED"})
+        super().send_task_success(taskToken, output)
+
+
+def test_late_approval_does_not_overwrite_superseded(stack, approvals):
+    request(approvals)
+    approvals.sfn = SupersedingSfn(stack.table("approvals"), "Z07-warning-e1-100")
+    status, body = decide(approvals, "Z07-warning-e1-100", "approve")
+    assert status == 200 and body["status"] == "SUPERSEDED"
+    assert stack.table("approvals").get_item(Key={"approval_id": "Z07-warning-e1-100"})["Item"]["status"] == "SUPERSEDED"
+
+
+def test_expired_and_superseded_reports_superseded(stack, approvals):
+    request(approvals)
+    approvals.sfn = SupersedingSfn(stack.table("approvals"), "Z07-warning-e1-100", error="TaskTimedOut")
+    status, body = decide(approvals, "Z07-warning-e1-100", "approve")
+    assert status == 409 and body["status"] == "SUPERSEDED"

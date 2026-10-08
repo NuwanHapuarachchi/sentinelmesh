@@ -99,7 +99,7 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
                   "updated_at = :u, eval_cell = :c, district = :dist")
         # Falling below advisory closes the alert episode: clear the workflow's de-duplication gate.
         if sc.RANK[tier] < sc.RANK["advisory"] <= sc.RANK[previous_tier]:
-            update += " REMOVE alert_rank, alert_tier, alert_exec"
+            update += " REMOVE alert_rank, alert_tier, alert_exec, alert_confirmed_at"
         try:
             state_table.update_item(
                 Key={"zone_id": zone_id},
