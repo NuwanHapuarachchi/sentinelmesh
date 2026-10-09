@@ -39,11 +39,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.AssistChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import kotlinx.coroutines.launch
@@ -122,7 +125,7 @@ fun openBatterySettings(ctx: Context) {
 fun TierPill(label: String, tier: String, blind: Boolean = false) {
     Text(
         label, color = onTier(tier, blind), style = MaterialTheme.typography.labelMedium,
-        modifier = Modifier.clip(RoundedCornerShape(50)).background(tierColor(tier, blind)).padding(horizontal = 10.dp, vertical = 4.dp),
+        modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(tierColor(tier, blind)).padding(horizontal = 10.dp, vertical = 5.dp),
     )
 }
 
@@ -130,7 +133,7 @@ fun TierPill(label: String, tier: String, blind: Boolean = false) {
 fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, color: Color = C.ink) {
     Button(
         onClick = onClick, enabled = enabled, modifier = modifier.height(54.dp),
-        shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = Color.White),
+        shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = Color.White),
     ) { Text(text, style = MaterialTheme.typography.titleMedium) }
 }
 
@@ -146,7 +149,7 @@ fun AreaPicker(
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     var locating by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     val locate = {
@@ -172,7 +175,8 @@ fun AreaPicker(
                     if (hasLocationPermission(ctx)) locate()
                     else permission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
                 },
-                modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(16.dp),
+                enabled = !locating && zones.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = C.river),
             ) {
                 Icon(Icons.Filled.LocationOn, null)
@@ -184,12 +188,14 @@ fun AreaPicker(
             SectionLabel(s.pickArea)
             Spacer(Modifier.height(6.dp))
             OutlinedTextField(
-                value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.fillMaxWidth().testTag("area-search"),
                 leadingIcon = { Icon(Icons.Filled.Search, null) }, placeholder = { Text(s.searchArea) },
-                shape = RoundedCornerShape(16.dp),
+                label = { Text(s.searchArea) },
+                shape = RoundedCornerShape(10.dp),
                 colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = C.paper, unfocusedContainerColor = C.paper, unfocusedBorderColor = C.rule),
             )
         }
+        if (shown.isEmpty() && zones.isNotEmpty()) item { Text(s.noAreas, color = C.inkSoft, modifier = Modifier.padding(12.dp)) }
         shown.groupBy { it.district }.forEach { (district, list) ->
             item(key = "d-$district") {
                 Text(district, style = MaterialTheme.typography.titleMedium, color = C.inkSoft, modifier = Modifier.padding(top = 10.dp, start = 4.dp))
@@ -198,8 +204,8 @@ fun AreaPicker(
                 val st = states[z.id]
                 val sel = z.id == selectedId
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(if (sel) Color(0xFFD6E6EE) else C.paper)
-                        .border(if (sel) 2.dp else 0.dp, if (sel) C.river else Color.Transparent, RoundedCornerShape(16.dp))
+                    Modifier.fillMaxWidth().testTag("area-${z.id}").clip(RoundedCornerShape(10.dp)).background(if (sel) Color(0xFFD6E6EE) else C.paper)
+                        .border(if (sel) 2.dp else 1.dp, if (sel) C.river else C.rule, RoundedCornerShape(10.dp))
                         .clickable { onPick(z) }.padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

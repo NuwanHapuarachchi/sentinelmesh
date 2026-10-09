@@ -10,6 +10,10 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +38,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,6 +57,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import lk.sentinelmesh.app.Lang
@@ -121,7 +128,7 @@ private fun kotlinx.coroutines.CoroutineScope.launchLoad() {
 @Composable
 private fun LanguageStep(current: Lang, next: () -> Unit) {
     val s = strings(current)
-    Column(Modifier.fillMaxSize().padding(20.dp).navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().padding(20.dp).navigationBarsPadding().verticalScroll(rememberScrollState()).selectableGroup()) {
         Text("භාෂාව · மொழி · Language", style = MaterialTheme.typography.labelLarge, color = C.inkSoft)
         Spacer(Modifier.height(4.dp))
         Text(s.chooseLanguage, style = MaterialTheme.typography.displaySmall)
@@ -132,14 +139,14 @@ private fun LanguageStep(current: Lang, next: () -> Unit) {
                 Modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(20.dp))
                     .background(if (sel) C.ink else C.paper)
                     .border(1.dp, if (sel) C.ink else C.rule, RoundedCornerShape(20.dp))
-                    .clickable { Sentinel.setLang(l) }.padding(horizontal = 20.dp, vertical = 20.dp),
+                    .selectable(selected = sel, role = Role.RadioButton, onClick = { Sentinel.setLang(l) }).padding(horizontal = 20.dp, vertical = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(l.native, style = MaterialTheme.typography.headlineSmall, color = if (sel) Color.White else C.ink, modifier = Modifier.weight(1f))
-                if (sel) Icon(Icons.Filled.Check, null, tint = Color.White)
+                RadioButton(selected = sel, onClick = null, colors = androidx.compose.material3.RadioButtonDefaults.colors(selectedColor = Color.White))
             }
         }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(24.dp))
         PrimaryButton(s.continueLabel, next, Modifier.fillMaxWidth())
     }
 }
@@ -151,7 +158,7 @@ private fun PermissionsStep(resumeTick: Int) {
     var tick by remember { mutableIntStateOf(0) }
     val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++ }
     @Suppress("UNUSED_VARIABLE") val refresh = resumeTick + tick
-    Column(Modifier.fillMaxSize().padding(20.dp).navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().padding(20.dp).navigationBarsPadding().verticalScroll(rememberScrollState())) {
         Text(s.stayProtected, style = MaterialTheme.typography.displaySmall)
         Text(s.stayProtectedHint, style = MaterialTheme.typography.bodyLarge, color = C.inkSoft)
         Spacer(Modifier.height(18.dp))
@@ -160,7 +167,7 @@ private fun PermissionsStep(resumeTick: Int) {
         }
         PermissionRow(Icons.Filled.Warning, s.permFullScreen, s.permFullScreenHint, fullScreenAllowed(ctx), s) { openFullScreenSettings(ctx) }
         PermissionRow(Icons.Filled.Refresh, s.permBackground, s.permBackgroundHint, backgroundAllowed(ctx), s) { openBatterySettings(ctx) }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(20.dp))
         Card(Modifier.fillMaxWidth()) {
             SectionLabel(s.privacy)
             Spacer(Modifier.height(4.dp))

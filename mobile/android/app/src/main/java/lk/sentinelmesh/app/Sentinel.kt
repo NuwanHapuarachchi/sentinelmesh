@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +32,8 @@ object Sentinel {
     val statesAt = MutableStateFlow(0L)
     val history = MutableStateFlow<List<AlertMsg>>(emptyList())
     val link = MutableStateFlow(Link.CONNECTING)
+    val refreshing = MutableStateFlow(false)
+    val refreshFailed = MutableStateFlow(false)
     private val _config = MutableStateFlow<AppConfig?>(null)
     val config: StateFlow<AppConfig?> = _config
 
@@ -98,16 +102,31 @@ object Sentinel {
         return _config.value
     }
 
-    fun refreshNow() = scope.launch {
-        runCatching { loadStates() }
+    fun refreshNow() = scope.launch { refresh() }
+
+    suspend fun refresh() = withContext(Dispatchers.IO) {
+        if (!refreshing.compareAndSet(false, true)) return@withContext
+        refreshFailed.value = false
+        try {
+            if (zones.value.isEmpty()) loadStatic()
+            check(loadStates()) { "Zone status is not available" }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            refreshFailed.value = true
+        } finally {
+            refreshing.value = false
+        }
     }
 
-    private fun loadStates() {
-        Net.getText("public/zones.json")?.let {
+    private fun loadStates(): Boolean {
+        val json = Net.getText("public/zones.json") ?: return false
+        json.let {
             states.value = Geo.parseStates(it)
             statesAt.value = System.currentTimeMillis()
             prefs.edit().putString("states_cache", it).putLong("states_at", statesAt.value).apply()
         }
+        return true
     }
 
     /** After (re)connecting, read the zone's last broadcast so nothing sent while offline is missed. */
