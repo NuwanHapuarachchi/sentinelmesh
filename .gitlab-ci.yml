@@ -163,6 +163,44 @@ web-tests:
     - for f in web/*.js; do node --check "$f"; done
     - node --test tests/web/*.test.mjs
 
+# The Android app (mobile/android): built here so the APK people install comes from the pipeline.
+# Runs when the app changes, and on apply runs so each deployment has a matching APK to download.
+android-apk:
+  image: eclipse-temurin:17-jdk
+  stage: test
+  interruptible: true
+  rules:
+    - if: $ACTION == "destroy"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "push"
+      changes: [mobile/android/**/*]
+    - if: $ACTION == "apply"
+  variables:
+    ANDROID_HOME: ${CI_PROJECT_DIR}/.android-sdk
+    GRADLE_USER_HOME: ${CI_PROJECT_DIR}/.gradle-home
+  cache:
+    key: android-sdk-36
+    paths: [.android-sdk/, .gradle-home/caches/, .gradle-home/wrapper/]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq unzip curl > /dev/null
+    - |
+      if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+        curl -sSLo /tmp/tools.zip https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+        mkdir -p "$ANDROID_HOME/cmdline-tools" && unzip -q /tmp/tools.zip -d "$ANDROID_HOME/cmdline-tools"
+        mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+      fi
+    - yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+    - '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" > /dev/null'
+  script:
+    - cd mobile/android
+    - chmod +x gradlew
+    - ./gradlew --no-daemon --console=plain assembleRelease
+    - cp app/build/outputs/apk/release/app-release.apk "$CI_PROJECT_DIR/sentinelmesh.apk"
+  artifacts:
+    name: sentinelmesh-android
+    paths: [sentinelmesh.apk]
+    expire_in: never
+
 # The IaC security scan and the committed-secrets scan only need to run when code changes, not on
 # apply/destroy runs.
 kics-iac-sast:
