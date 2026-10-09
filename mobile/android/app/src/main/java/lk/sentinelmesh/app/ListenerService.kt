@@ -28,6 +28,7 @@ import kotlin.random.Random
  */
 class ListenerService : Service() {
     private var loop: Job? = null
+    private var watcher: Job? = null
     @Volatile private var current: MqttListener? = null
     @Volatile private var wake = CompletableDeferred<Unit>()
     private var creds: AwsCredentials? = null
@@ -43,7 +44,7 @@ class ListenerService : Service() {
         ServiceCompat.startForeground(this, Alarm.LISTENER_ID, Alarm.listenerNotification(this, Sentinel.link.value), type)
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(netCallback)
         loop = Sentinel.scope.launch { run() }
-        Sentinel.scope.launch {
+        watcher = Sentinel.scope.launch {
             Sentinel.link.collect { Alarm.updateListener(this@ListenerService, it) }
         }
     }
@@ -56,6 +57,7 @@ class ListenerService : Service() {
     override fun onDestroy() {
         runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(netCallback) }
         loop?.cancel()
+        watcher?.cancel()
         current?.close()
         super.onDestroy()
     }
@@ -83,7 +85,9 @@ class ListenerService : Service() {
     }
 
     private suspend fun connect(zone: String, closed: CompletableDeferred<String>) {
-        val cfg = Sentinel.config.value ?: Sentinel.loadStatic() ?: error("no config")
+        // A cached config from before the app endpoint existed: fetch a fresh one.
+        val cfg = Sentinel.config.value?.takeIf { it.identityPoolId.isNotBlank() && it.iotEndpoint.isNotBlank() }
+            ?: Sentinel.loadStatic() ?: error("no config")
         require(cfg.identityPoolId.isNotBlank() && cfg.iotEndpoint.isNotBlank()) { "config has no app endpoint" }
         val id = Sentinel.identityId() ?: Cognito.identityId(cfg, null).also { Sentinel.saveIdentityId(it) }
         val c = creds?.takeIf { it.expiresAtMs - System.currentTimeMillis() > 10 * 60_000 }
