@@ -194,11 +194,13 @@ android-apk:
   script:
     - cd mobile/android
     - chmod +x gradlew
-    - ./gradlew --no-daemon --console=plain assembleRelease
+    - ./gradlew --no-daemon --console=plain assembleRelease testDebugUnitTest lintDebug
     - cp app/build/outputs/apk/release/app-release.apk "$CI_PROJECT_DIR/sentinelmesh.apk"
   artifacts:
     name: sentinelmesh-android
     paths: [sentinelmesh.apk]
+    reports:
+      junit: mobile/android/app/build/test-results/testDebugUnitTest/TEST-*.xml
     expire_in: never
 
 # The IaC security scan and the committed-secrets scan only need to run when code changes, not on

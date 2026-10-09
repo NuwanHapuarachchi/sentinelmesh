@@ -13,6 +13,7 @@ Everything is Terraform and everything runs in GitLab CI/CD. Nobody provisions f
 | `terraform/modules/` | `shared` (tables, buckets), `cell` (one detection and delivery cell), `lambda_fn` (one function with its own role and logs) |
 | `services/` | Lambda code (Python 3.13, stdlib + boto3) |
 | `web/` | Dashboard, officer console, simulated phone |
+| `mobile/android/` | Native Android resident app: trilingual alerts, live zone map and background listener; see [mobile setup](mobile/README.md) |
 | `edge/` | Programs that run outside AWS: `field_gateway.py` (a simulated station with its own X.509 certificate) and the standard-library MQTT client they share |
 | `tests/unit`, `tests/web`, `tests/e2e`, `tests/load` | Tests run by the pipeline (unit with moto, the phone page in Node, live end-to-end, burst) |
 | `scripts/gen_zones.py` | Generates the 80 hazard zones + test, heartbeat and load zones |
