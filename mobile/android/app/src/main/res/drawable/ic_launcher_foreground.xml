@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A shield with a rising river line: watching the water for you. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,28 L76,36 L76,54 C76,67 66,77 54,82 C42,77 32,67 32,54 L32,36 Z" />
+    <path
+        android:fillColor="#2F6F8F"
+        android:pathData="M36,58 C41,54 45,54 49,57 C53,60 57,60 61,57 C65,54 69,54 72,57 C71,67 63,74 54,78 C45,74 38,67 36,58 Z" />
+    <path
+        android:fillColor="#E8913A"
+        android:pathData="M51,38 L57,38 L56.2,50 L51.8,50 Z M54,52.5 A2.6,2.6 0 1,1 53.99,52.5 Z" />
+</vector>
