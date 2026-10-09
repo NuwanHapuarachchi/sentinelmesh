@@ -51,8 +51,20 @@ pipeline to provision these resources.
 ## Verification
 
 Unit tests cover multipart area matching, outside-coverage selection, alert expiry, status validation
-and cross-zone rejection. The Android CI job builds `sentinelmesh.apk`, runs unit tests and lint,
-and publishes JUnit results. Release APKs currently use the debug signing key for demo installation;
+and cross-zone rejection. Shared Compose tests exercise navigation, combined alert filters, language
+selection, area search, unavailable status, refresh retry and emergency acknowledgement. They run
+locally with Robolectric's Android 14 native graphics runtime during `testDebugUnitTest`; the same
+scenarios can run on an emulator or connected Android device with `connectedDebugAndroidTest`.
+Screenshots from local tests are saved in `android/app/build/reports/ui-screenshots/`; device test
+screenshots are saved in the app's external files under `ui-screenshots/`.
+
+The app follows the web console's colours and bundles its Barlow Condensed and Source Sans 3 fonts
+for consistent offline rendering. Font licenses are in `mobile/licenses/`. Material 3 navigation,
+segmented language selection, filter chips, pull-to-refresh, scrollable onboarding and searchable map
+selection provide native controls. Cached status always includes its download time.
+
+The Android CI job builds `sentinelmesh.apk`, compiles device UI tests, runs local UI/unit tests and
+lint, and publishes JUnit results. Release APKs currently use the debug signing key for demo installation;
 store distribution needs a dedicated signing configuration.
 
 On a device, verify each language, permissions denied/allowed, a locked-screen test alarm, a real
