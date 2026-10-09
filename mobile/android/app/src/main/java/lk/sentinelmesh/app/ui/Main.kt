@@ -18,7 +18,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -90,7 +93,7 @@ fun MainScreen(resumeTick: Int) {
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
+        Box(Modifier.padding(pad).consumeWindowInsets(pad).fillMaxSize()) {
             when (tab) {
                 0 -> HomeTab(s, lang) { tab = 1 }
                 1 -> MapTab(s)
@@ -133,7 +136,7 @@ private fun HomeTab(s: Strings, lang: Lang, openMap: () -> Unit) {
     val blind = st?.blind == true
     val latest = history.firstOrNull { it.zoneId == myId || it.channel == "test" }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().padding(horizontal = 18.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("SentinelMesh", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
@@ -221,30 +224,29 @@ private fun Color.compositeOver(bg: Color): Color {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun AlertRow(m: AlertMsg, s: Strings, lang: Lang) {
     val zone = Sentinel.zone(m.zoneId)
     Row(Modifier.fillMaxWidth()) {
         Box(Modifier.width(6.dp).height(78.dp).clip(RoundedCornerShape(3.dp)).background(tierColor(m.tier)))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 TierPill(s.headline[m.tier] ?: m.tier, m.tier)
                 if (m.status != "Actual") {
                     Spacer(Modifier.width(6.dp))
                     Text(s.exercise, style = MaterialTheme.typography.labelMedium, color = C.inkSoft)
                 }
-                Spacer(Modifier.weight(1f))
-                Text(clock(m.receivedAt), style = MaterialTheme.typography.labelMedium, color = C.inkSoft)
             }
             Spacer(Modifier.height(6.dp))
             Text(m.text(lang), style = MaterialTheme.typography.bodyLarge)
             val via = when (m.channel) { "push" -> s.viaPush; "catchup" -> s.viaCatchUp; else -> s.viaTest }
-            Text(listOfNotNull(zone?.name, "${s.via} $via").joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = C.inkSoft, modifier = Modifier.padding(top = 4.dp))
+            Text(listOfNotNull(clock(m.receivedAt), zone?.name, "${s.via} $via").joinToString(" · "), style = MaterialTheme.typography.labelMedium, color = C.inkSoft, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun MapTab(s: Strings) {
     val zones by Sentinel.zones.collectAsState()
@@ -253,10 +255,10 @@ private fun MapTab(s: Strings) {
     var selected by remember { mutableStateOf<Zone?>(null) }
     Box(Modifier.fillMaxSize()) {
         ZoneMap(zones, states, myId, selected?.id, onSelect = { selected = it }, modifier = Modifier.fillMaxSize())
-        Column(Modifier.statusBarsPadding().padding(12.dp)) {
-            Row(
-                Modifier.clip(RoundedCornerShape(18.dp)).background(C.paper.copy(alpha = 0.94f)).padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically,
+        Column(Modifier.padding(12.dp)) {
+            FlowRow(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(C.paper.copy(alpha = 0.94f)).padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 TIER_ORDER.forEach { t ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -296,7 +298,7 @@ private fun MapTab(s: Strings) {
 @Composable
 private fun AlertsTab(s: Strings, lang: Lang) {
     val history by Sentinel.history.collectAsState()
-    LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(s.alerts, style = MaterialTheme.typography.displaySmall, modifier = Modifier.weight(1f))
@@ -322,7 +324,7 @@ private fun SettingsTab(s: Strings, lang: Lang, resumeTick: Int) {
     val myId by Sentinel.myZoneId.collectAsState()
     var picking by remember { mutableStateOf(false) }
     @Suppress("UNUSED_VARIABLE") val refresh = resumeTick
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(s.settings, style = MaterialTheme.typography.displaySmall)
         Card(Modifier.fillMaxWidth()) {
             SectionLabel(s.language)
@@ -374,7 +376,7 @@ private fun SettingsTab(s: Strings, lang: Lang, resumeTick: Int) {
             Column(Modifier.padding(horizontal = 18.dp)) {
                 Text(s.yourArea, style = MaterialTheme.typography.headlineSmall)
                 Spacer(Modifier.height(10.dp))
-                AreaPicker(s, zones, states, myId, onPick = { Sentinel.setZone(it.id); picking = false }, modifier = Modifier.fillMaxWidth().height(560.dp))
+                AreaPicker(s, zones, states, myId, onPick = { Sentinel.setZone(it.id); picking = false }, modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp))
             }
         }
     }

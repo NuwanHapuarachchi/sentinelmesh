@@ -5,6 +5,8 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -118,7 +120,7 @@ private fun kotlinx.coroutines.CoroutineScope.launchLoad() {
 @Composable
 private fun LanguageStep(current: Lang, next: () -> Unit) {
     val s = strings(current)
-    Column(Modifier.fillMaxSize().padding(20.dp).navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text("භාෂාව · மொழி · Language", style = MaterialTheme.typography.labelLarge, color = C.inkSoft)
         Spacer(Modifier.height(4.dp))
         Text(s.chooseLanguage, style = MaterialTheme.typography.displaySmall)
@@ -136,7 +138,7 @@ private fun LanguageStep(current: Lang, next: () -> Unit) {
                 if (sel) Icon(Icons.Filled.Check, null, tint = Color.White)
             }
         }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(24.dp))
         PrimaryButton(s.continueLabel, next, Modifier.fillMaxWidth())
     }
 }
@@ -148,7 +150,7 @@ private fun PermissionsStep(resumeTick: Int) {
     var tick by remember { mutableIntStateOf(0) }
     val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++ }
     @Suppress("UNUSED_VARIABLE") val refresh = resumeTick + tick
-    Column(Modifier.fillMaxSize().padding(20.dp).navigationBarsPadding()) {
+    Column(Modifier.fillMaxSize().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp)) {
         Text(s.stayProtected, style = MaterialTheme.typography.displaySmall)
         Text(s.stayProtectedHint, style = MaterialTheme.typography.bodyLarge, color = C.inkSoft)
         Spacer(Modifier.height(18.dp))
@@ -157,7 +159,7 @@ private fun PermissionsStep(resumeTick: Int) {
         }
         PermissionRow(Icons.Filled.Warning, s.permFullScreen, s.permFullScreenHint, fullScreenAllowed(ctx), s) { openFullScreenSettings(ctx) }
         PermissionRow(Icons.Filled.Refresh, s.permBackground, s.permBackgroundHint, backgroundAllowed(ctx), s) { openBatterySettings(ctx) }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(24.dp))
         Card(Modifier.fillMaxWidth()) {
             SectionLabel(s.privacy)
             Spacer(Modifier.height(4.dp))
