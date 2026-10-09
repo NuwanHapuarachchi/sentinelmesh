@@ -2,6 +2,7 @@ package lk.sentinelmesh.app.ui
 
 import android.Manifest
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -39,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,7 +62,8 @@ import lk.sentinelmesh.app.strings
 fun Onboarding(resumeTick: Int) {
     val lang by Sentinel.lang.collectAsState()
     val s = strings(lang)
-    var step by remember { mutableIntStateOf(0) }
+    var step by rememberSaveable { mutableIntStateOf(0) }
+    BackHandler(enabled = step > 0) { step-- }
     val zones by Sentinel.zones.collectAsState()
     val states by Sentinel.states.collectAsState()
     val myZone by Sentinel.myZoneId.collectAsState()
