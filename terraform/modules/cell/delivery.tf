@@ -98,10 +98,12 @@ module "dispatch" {
     SEND_QUEUE_IMMINENT = aws_sqs_queue.send["imminent"].url
     SEND_QUEUE_WARNING  = aws_sqs_queue.send["warning"].url
     SEND_QUEUE_ADVISORY = aws_sqs_queue.send["advisory"].url
+    IOT_ENDPOINT        = var.iot_endpoint
   }
 
   policy_statements = [
     { Effect = "Allow", Action = "dynamodb:Query", Resource = "${var.delivery.subscribers.arn}/index/by-zone" },
+    { Effect = "Allow", Action = "iot:Publish", Resource = "arn:aws:iot:${local.region}:${local.account_id}:topic/sm/broadcast/*" },
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = var.delivery.alerts.arn },
     { Effect = "Allow", Action = "s3:PutObject", Resource = "${var.delivery.web_bucket.arn}/cb/*" },
     { Effect = "Allow", Action = "sqs:SendMessage", Resource = [for q in aws_sqs_queue.send : q.arn] },

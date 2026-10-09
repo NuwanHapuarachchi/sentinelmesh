@@ -63,6 +63,24 @@ def test_planner_broadcasts_first_then_batches_the_audience(stack, planner):
     assert meta["audience"] == 120 and meta["batches"] == 3 and meta["planned_at"] > 0
 
 
+class FakeIot:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, topic, qos, payload):
+        self.published.append((topic, qos, json.loads(payload)))
+
+
+def test_planner_pushes_the_broadcast_to_app_listeners(stack, planner):
+    planner.iot = FakeIot()
+    a = alert()
+    put_alert_meta(stack, a)
+    planner.handler(sqs_event(a), None)
+    [(topic, qos, msg)] = planner.iot.published
+    assert (topic, qos) == ("sm/broadcast/Z07", 1)
+    assert msg["alert_id"] == "SM-1" and msg["texts"] == a["texts"] and msg["broadcast_at"] > 0
+
+
 def test_planner_uses_the_tiers_own_send_queue(stack, planner):
     a = alert(tier="advisory")
     put_alert_meta(stack, a)

@@ -2,13 +2,14 @@
 concurrency so urgent alerts never wait behind advisories) and fans an alert out:
 
 1. Cell-broadcast stand-in first: cb/{zone}.json in the web bucket; phones in the zone poll it via
-   CloudFront. Nothing on the SMS side can delay it.
+   CloudFront. The same message is pushed on IoT Core topic sm/broadcast/{zone}, where the Android app
+   listens (listen-only Cognito guests). Nothing on the SMS side can delay either.
 2. The zone's subscribers, page by page, as batches on the tier's send queue; sender Lambdas deliver them
    in parallel (sender/handler.py). Re-planning a redelivered alert is safe: the delivery ledger stops
    anyone being sent the same alert twice.
 
 Environment: SUBSCRIBERS_TABLE, ALERTS_TABLE, WEB_BUCKET, CELL, SEND_QUEUE_IMMINENT, SEND_QUEUE_WARNING,
-SEND_QUEUE_ADVISORY, BATCH_SIZE (recipients per send message, default 50).
+SEND_QUEUE_ADVISORY, BATCH_SIZE (recipients per send message, default 50), IOT_ENDPOINT (optional).
 """
 
 import json
@@ -17,12 +18,14 @@ import time
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
 from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
+iot = boto3.client("iot-data", endpoint_url=f"https://{os.environ['IOT_ENDPOINT']}") if os.environ.get("IOT_ENDPOINT") else None
 subscribers = ddb.Table(os.environ["SUBSCRIBERS_TABLE"])
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 SEND_QUEUES = {t: os.environ[f"SEND_QUEUE_{t.upper()}"] for t in ("imminent", "warning", "advisory")}
@@ -50,6 +53,7 @@ def plan(alert):
         CacheControl="max-age=2",
         Body=json.dumps({**alert, "broadcast_at": int(now)}, ensure_ascii=False).encode("utf-8"),
     )
+    push_broadcast(zone_id, {**alert, "broadcast_at": int(now)})
 
     queue, entries, audience, batches = SEND_QUEUES[tier], [], 0, 0
     kwargs = {"IndexName": "by-zone", "KeyConditionExpression": Key("zone_id").eq(zone_id), "Limit": BATCH_SIZE}
@@ -90,3 +94,14 @@ def send_batch(queue, entries):
     failed = sqs.send_message_batch(QueueUrl=queue, Entries=entries).get("Failed", [])
     if failed:  # fail the alert message; it is re-planned and the ledger skips anyone already sent
         raise RuntimeError(f"{len(failed)} send batches not queued: {failed[0].get('Code')}")
+
+
+def push_broadcast(zone_id, message):
+    """Push the broadcast to app listeners in the zone (best effort: the app also reads cb/{zone}.json)."""
+    if iot is None:
+        return
+    try:
+        iot.publish(topic=f"sm/broadcast/{zone_id}", qos=1, payload=json.dumps(message, ensure_ascii=False).encode("utf-8"))
+        metric("AppBroadcasts", 1, Tier=message.get("tier", "unknown"))
+    except ClientError as exc:
+        log("app_broadcast_failed", zone_id=zone_id, error=str(exc))
