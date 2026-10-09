@@ -164,7 +164,7 @@ web-tests:
     - node --test tests/web/*.test.mjs
 
 # The Android app (mobile/android): built here so the APK people install comes from the pipeline.
-# Runs when the app changes, and on apply runs so each deployment has a matching APK to download.
+# Runs when the app changes, and on every pipeline started by hand (plan/apply) so it has a matching APK.
 android-apk:
   image: eclipse-temurin:17-jdk
   stage: test
@@ -174,7 +174,7 @@ android-apk:
       when: never
     - if: $CI_PIPELINE_SOURCE == "push"
       changes: [mobile/android/**/*]
-    - if: $ACTION == "apply"
+    - if: $CI_PIPELINE_SOURCE != "push"
   variables:
     ANDROID_HOME: ${CI_PROJECT_DIR}/.android-sdk
     GRADLE_USER_HOME: ${CI_PROJECT_DIR}/.gradle-home
