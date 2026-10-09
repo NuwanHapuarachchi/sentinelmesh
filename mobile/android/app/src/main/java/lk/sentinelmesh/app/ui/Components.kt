@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -26,7 +27,14 @@ import lk.sentinelmesh.app.ZoneState
 /** Native controls, shared across screens, using the web console's palette and typography. */
 @Composable
 fun LanguageSelector(current: Lang, onSelect: (Lang) -> Unit, modifier: Modifier = Modifier) {
-    SingleChoiceSegmentedButtonRow(modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+    if (maxWidth < 360.dp && LocalDensity.current.fontScale > 1.2f) {
+        Column(Modifier.fillMaxWidth()) {
+            Lang.entries.forEach { lang ->
+                FilterChip(selected = current == lang, onClick = { onSelect(lang) }, label = { Text(lang.native) }, modifier = Modifier.fillMaxWidth().testTag("language-${lang.code}"))
+            }
+        }
+    } else SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
         Lang.entries.forEachIndexed { index, lang ->
             SegmentedButton(
                 selected = lang == current, onClick = { onSelect(lang) },
@@ -37,8 +45,10 @@ fun LanguageSelector(current: Lang, onSelect: (Lang) -> Unit, modifier: Modifier
             ) { Text(lang.native, maxLines = 1) }
         }
     }
+    }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StatusCard(zone: Zone?, state: ZoneState?, downloadedAt: Long, s: Strings, modifier: Modifier = Modifier) {
     val tier = state?.tier ?: "unknown"
@@ -47,8 +57,8 @@ fun StatusCard(zone: Zone?, state: ZoneState?, downloadedAt: Long, s: Strings, m
     Card(modifier.fillMaxWidth(), padding = 0.dp) {
         Box(Modifier.fillMaxWidth().height(5.dp).background(tierColor(tier, blind)))
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                SectionLabel(s.nowIn, Modifier.weight(1f))
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionLabel(s.nowIn)
                 TierPill(label, tier, blind)
             }
             Text(zone?.name ?: s.yourArea, style = MaterialTheme.typography.displaySmall)
@@ -61,10 +71,12 @@ fun StatusCard(zone: Zone?, state: ZoneState?, downloadedAt: Long, s: Strings, m
                     val selected = level == tier
                     Column(Modifier.weight(1f).semantics { contentDescription = "${s.tier[level]}${if (selected) ", $label" else ""}" }) {
                         Box(Modifier.fillMaxWidth().height(if (selected) 8.dp else 5.dp).clip(RoundedCornerShape(2.dp)).background(tierColor(level)))
-                        Spacer(Modifier.height(5.dp))
-                        Text(s.tier[level] ?: level, style = MaterialTheme.typography.labelMedium, color = if (selected) C.ink else C.inkSoft)
                     }
                 }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(s.tier.getValue("normal"), style = MaterialTheme.typography.labelMedium, color = C.inkSoft)
+                Text(s.tier.getValue("imminent"), style = MaterialTheme.typography.labelMedium, color = C.inkSoft)
             }
             if (downloadedAt > 0) {
                 HorizontalDivider(color = C.rule, modifier = Modifier.padding(top = 6.dp))
@@ -95,12 +107,14 @@ fun RefreshFeedback(failed: Boolean, s: Strings, onRetry: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RiskLegend(s: Strings) {
-    Row(
+    FlowRow(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(C.paper.copy(alpha = 0.96f))
-            .horizontalScroll(rememberScrollState()).padding(12.dp),
+            .padding(12.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         TIER_ORDER.forEach { level ->
             Row(verticalAlignment = Alignment.CenterVertically) {

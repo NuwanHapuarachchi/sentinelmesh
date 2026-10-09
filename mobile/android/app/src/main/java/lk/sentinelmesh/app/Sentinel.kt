@@ -61,8 +61,10 @@ object Sentinel {
                 statesAt.value = prefs.getLong("states_at", 0L)
             }
         }
-        scope.launch { refreshLoop() }
     }
+
+    /** Start network monitoring after local state and notification channels are ready. */
+    fun startMonitoring() = scope.launch { refreshLoop() }
 
     fun setLang(l: Lang) { lang.value = l; prefs.edit().putString("lang", l.code).apply() }
 

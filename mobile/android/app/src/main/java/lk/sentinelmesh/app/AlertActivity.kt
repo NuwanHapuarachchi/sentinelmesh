@@ -2,6 +2,7 @@ package lk.sentinelmesh.app
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -63,6 +64,13 @@ class AlertActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+        }
         load(intent)
         setContent { SentinelTheme { alert.value?.let { AlertScreen(it) { dismiss() } } } }
     }
@@ -84,13 +92,13 @@ class AlertActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AlertScreen(m: AlertMsg, onAck: () -> Unit) {
+internal fun AlertScreen(m: AlertMsg, onAck: () -> Unit) {
     val lang by Sentinel.lang.collectAsState()
     val s = strings(lang)
     val zone = Sentinel.zone(m.zoneId)
     val base = tierColor(m.tier)
     val pulse = rememberInfiniteTransition(label = "p").animateFloat(0.92f, 1.08f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "s")
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(base, Color(0xFF2A0710))))) {
+    Box(Modifier.fillMaxSize().background(base)) {
         Column(
             Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(24.dp),
         ) {
@@ -102,15 +110,15 @@ private fun AlertScreen(m: AlertMsg, onAck: () -> Unit) {
             }
             Spacer(Modifier.height(22.dp))
             if (m.status != "Actual") Text(s.exercise.uppercase(), color = Color(0xFFFFE08A), style = MaterialTheme.typography.labelLarge)
-            Text(s.headline[m.tier] ?: m.tier, color = Color.White, fontSize = 40.sp, lineHeight = 44.sp, fontWeight = FontWeight.Black)
+            Text(s.headline[m.tier] ?: m.tier, color = Color.White, style = MaterialTheme.typography.displaySmall)
             Spacer(Modifier.height(6.dp))
             Text(
                 listOfNotNull(zone?.name, zone?.district, s.hazardOf(m.hazard)).joinToString(" · "),
                 color = Color(0xE6FFFFFF), style = MaterialTheme.typography.titleMedium,
             )
             Spacer(Modifier.height(22.dp))
-            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color(0x26FFFFFF)).padding(20.dp)) {
-                Text(m.text(lang), color = Color.White, fontSize = 22.sp, lineHeight = 31.sp, fontWeight = FontWeight.SemiBold)
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color(0x26FFFFFF)).padding(20.dp)) {
+                Text(m.text(lang), color = Color.White, style = MaterialTheme.typography.titleLarge)
             }
             Spacer(Modifier.height(18.dp))
             Text(s.whatToDo.uppercase(), color = Color(0xCCFFFFFF), style = MaterialTheme.typography.labelMedium)
@@ -126,7 +134,7 @@ private fun AlertScreen(m: AlertMsg, onAck: () -> Unit) {
             Text("${s.receivedAt} ${clock(m.receivedAt)}", color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.height(28.dp))
             Button(
-                onClick = onAck, modifier = Modifier.fillMaxWidth().height(62.dp), shape = RoundedCornerShape(18.dp),
+                onClick = onAck, modifier = Modifier.fillMaxWidth().height(62.dp), shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = base),
             ) { Text(s.understood, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
             Spacer(Modifier.height(8.dp))

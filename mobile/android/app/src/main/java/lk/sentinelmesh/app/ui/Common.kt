@@ -39,7 +39,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.AssistChip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -100,8 +99,14 @@ suspend fun currentLocation(ctx: Context): LatLon? {
 fun hasLocationPermission(ctx: Context) =
     ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-fun notificationsAllowed(ctx: Context) = Build.VERSION.SDK_INT < 33 ||
-    ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+fun notificationsAllowed(ctx: Context) = ctx.getSystemService(NotificationManager::class.java).areNotificationsEnabled() &&
+    (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+
+fun openAppNotificationSettings(ctx: Context) {
+    runCatching {
+        ctx.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName))
+    }
+}
 
 fun fullScreenAllowed(ctx: Context) = Build.VERSION.SDK_INT < 34 ||
     ctx.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()

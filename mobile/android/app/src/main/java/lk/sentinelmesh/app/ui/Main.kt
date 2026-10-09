@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -66,7 +65,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -122,14 +120,14 @@ fun MainScreen(resumeTick: Int) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             screenState.SaveableStateProvider(tab) {
-            when (tab) {
-                0 -> PullToRefreshBox(isRefreshing = refreshing, onRefresh = { Sentinel.refreshNow() }) {
-                    HomeTab(s, lang, refreshFailed) { tab = 1 }
+                when (tab) {
+                    0 -> PullToRefreshBox(isRefreshing = refreshing, onRefresh = { Sentinel.refreshNow() }) {
+                        HomeTab(s, lang, refreshFailed) { tab = 1 }
+                    }
+                    1 -> MapTab(s)
+                    2 -> AlertsTab(s, lang)
+                    else -> SettingsTab(s, lang, resumeTick)
                 }
-                1 -> MapTab(s)
-                2 -> AlertsTab(s, lang)
-                else -> SettingsTab(s, lang, resumeTick)
-            }
             }
         }
     }
@@ -384,11 +382,5 @@ private fun SettingsTab(s: Strings, lang: Lang, resumeTick: Int) {
                 AreaPicker(s, zones, states, myId, onPick = { Sentinel.setZone(it.id); picking = false }, modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp))
             }
         }
-    }
-}
-
-private fun openAppNotificationSettings(ctx: android.content.Context) {
-    runCatching {
-        ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
     }
 }

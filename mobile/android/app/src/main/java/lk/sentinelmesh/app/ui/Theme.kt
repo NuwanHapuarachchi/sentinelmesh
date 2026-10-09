@@ -62,7 +62,10 @@ fun onTier(tier: String?, blind: Boolean = false): Color =
 val TIER_ORDER = listOf("normal", "watch", "advisory", "warning", "imminent")
 
 private val displayFont = FontFamily(Font(R.font.barlow_condensed_semibold, FontWeight.SemiBold))
-private val bodyFont = FontFamily(Font(R.font.source_sans))
+private val bodyFont = FontFamily(
+    Font(R.font.source_sans, FontWeight.Normal),
+    Font(R.font.source_sans_semibold, FontWeight.SemiBold),
+)
 private val type = Typography(
     displaySmall = TextStyle(fontFamily = displayFont, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, lineHeight = 38.sp),
     headlineSmall = TextStyle(fontFamily = displayFont, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, lineHeight = 32.sp),
