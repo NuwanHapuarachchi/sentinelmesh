@@ -174,8 +174,7 @@ resource "aws_lambda_event_source_mapping" "sender" {
 # ---------- escalation workflow ----------
 
 resource "aws_cloudwatch_log_group" "escalation" {
-  name              = "/aws/vendedlogs/states/${local.name}-escalation"
-  retention_in_days = var.log_retention_days
+  name = "/aws/vendedlogs/states/${local.name}-escalation"
 }
 
 resource "aws_iam_role" "escalation" {

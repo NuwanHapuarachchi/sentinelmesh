@@ -531,8 +531,7 @@ resource "aws_wafv2_web_acl_association" "api" {
 # delivery-report secret are redacted, so the logs hold no credentials. Query strings are redacted too:
 # gateways that can't send headers pass the delivery-report secret as ?k=.
 resource "aws_cloudwatch_log_group" "waf" {
-  name              = "aws-waf-logs-${var.prefix}-api"
-  retention_in_days = 14
+  name = "aws-waf-logs-${var.prefix}-api"
 }
 
 resource "aws_wafv2_web_acl_logging_configuration" "api" {

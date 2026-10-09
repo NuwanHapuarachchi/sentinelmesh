@@ -3,9 +3,8 @@
 # Batches that still fail after the retries land here (as stream pointers, replayable for 24 h) instead
 # of being dropped; an alarm on this queue means the evidence lake has a gap.
 resource "aws_sqs_queue" "archive_dlq" {
-  name                      = "${local.name}-archive-dlq"
-  sqs_managed_sse_enabled   = true
-  message_retention_seconds = 1209600
+  name                    = "${local.name}-archive-dlq"
+  sqs_managed_sse_enabled = true
 }
 
 module "archiver" {
