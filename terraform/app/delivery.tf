@@ -63,6 +63,8 @@ locals {
     approvals          = { name = module.shared.tables.approvals, arn = module.shared.table_arns.approvals }
     subscribers        = { name = module.shared.tables.subscribers, arn = module.shared.table_arns.subscribers }
     inbox              = { name = module.shared.tables.inbox, arn = module.shared.table_arns.inbox }
+    deliveries         = { name = module.shared.tables.deliveries, arn = module.shared.table_arns.deliveries }
+    meta               = { name = module.shared.tables.meta, arn = module.shared.table_arns.meta }
     web_bucket         = { name = module.shared.buckets.web, arn = module.shared.bucket_arns.web }
     decisions_bucket   = { name = module.shared.buckets.decisions, arn = module.shared.bucket_arns.decisions }
     approvals_fn_arn   = "arn:aws:lambda:${var.region}:${var.account_id}:function:${var.prefix}-approvals"
@@ -70,8 +72,14 @@ locals {
     sms_secret_arn     = aws_secretsmanager_secret.sms.arn
   }
 
+  # simulator unless chosen: http when a gateway URL is set, or eum (AWS End User Messaging, sms.tf).
+  sms_provider = var.sms_provider != "" ? var.sms_provider : (var.sms_provider_url == "" ? "simulator" : "http")
   sms_config = merge(
-    { SMS_PROVIDER = var.sms_provider_url == "" ? "simulator" : "http" },
-    var.sms_provider_url == "" ? {} : merge({ SMS_HTTP_URL = var.sms_provider_url }, var.sms_http_options),
+    { SMS_PROVIDER = local.sms_provider },
+    local.sms_provider == "http" ? merge({ SMS_HTTP_URL = var.sms_provider_url }, var.sms_http_options) : {},
+    local.sms_provider == "eum" ? {
+      EUM_CONFIGURATION_SET    = one(aws_pinpointsmsvoicev2_configuration_set.alerts[*].name)
+      EUM_ORIGINATION_IDENTITY = var.eum_origination_identity
+    } : {},
   )
 }

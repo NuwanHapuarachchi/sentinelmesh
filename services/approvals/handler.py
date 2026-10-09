@@ -1,4 +1,7 @@
-"""Duty-officer approvals for warning-tier alerts.
+"""Duty-officer approvals for warning-tier alerts and all-clears.
+
+A warning that nobody decides on is issued anyway (fail toward alerting); an all-clear that nobody confirms
+is NOT sent, so the earlier alert stays in force (fail toward staying alerted).
 
 Invoked two ways:
 - Step Functions (lambda:invoke.waitForTaskToken) with op=approval_request: stores the task
@@ -6,8 +9,7 @@ Invoked two ways:
 - API Gateway (Cognito duty_officer group): GET /approvals lists pending ones with evidence;
   POST /approvals/{id} {"decision": "approve"|"reject", "note": "..."} resumes the workflow.
 
-If nobody decides before the zone's approval timeout, the workflow issues the alert anyway
-(fail toward alerting) and the approval becomes AUTO_ISSUED.
+On a timeout the workflow settles the approval: AUTO_ISSUED for a warning, EXPIRED for an all-clear.
 Environment: APPROVALS_TABLE, OFFICERS_TOPIC_ARN.
 """
 
@@ -50,24 +52,29 @@ def request(event):
         }, default=str),
     })
     if os.environ.get("OFFICERS_TOPIC_ARN") and not inp.get("is_test"):
-        sns.publish(
-            TopicArn=os.environ["OFFICERS_TOPIC_ARN"],
-            Subject=f"SentinelMesh: approve WARNING for {inp['zone_id']} within {timeout}s",
-            Message=(f"A {inp.get('hazard', 'flood')} WARNING for zone {inp['zone_id']} needs approval.\n"
-                     f"Score {inp.get('score')}; agreeing sources: {', '.join(inp.get('agreeing') or [])}.\n"
-                     f"If nobody decides within {timeout} seconds the alert is issued automatically.\n"
-                     "Open the SentinelMesh officer console to approve or reject."),
-        )
+        if inp["tier"] == "clear":
+            subject = f"SentinelMesh: confirm ALL CLEAR for {inp['zone_id']} within {timeout}s"
+            message = (f"Zone {inp['zone_id']} has fallen back below advisory. An all-clear for its earlier alert is ready.\n"
+                       f"If nobody confirms within {timeout} seconds, no all-clear is sent and the alert stays in force.\n"
+                       "Open the SentinelMesh officer console to send or hold it.")
+        else:
+            subject = f"SentinelMesh: approve WARNING for {inp['zone_id']} within {timeout}s"
+            message = (f"A {inp.get('hazard', 'flood')} WARNING for zone {inp['zone_id']} needs approval.\n"
+                       f"Score {inp.get('score')}; agreeing sources: {', '.join(inp.get('agreeing') or [])}.\n"
+                       f"If nobody decides within {timeout} seconds the alert is issued automatically.\n"
+                       "Open the SentinelMesh officer console to approve or reject.")
+        sns.publish(TopicArn=os.environ["OFFICERS_TOPIC_ARN"], Subject=subject, Message=message)
     log("approval_requested", approval_id=event["approval_id"], zone_id=inp["zone_id"], timeout=timeout)
     return {"requested": True}
 
 
 def list_pending():
+    """Pending approvals for real zones; hidden test, heartbeat and load zones are never shown to officers."""
     items = approvals.query(IndexName="pending", KeyConditionExpression=Key("pending").eq("PENDING"))["Items"]
     now = int(time.time())
     return respond(200, {"approvals": [
         {k: v for k, v in i.items() if k != "task_token"} | {"seconds_left": max(0, int(i["deadline"]) - now)}
-        for i in items
+        for i in items if not str(i.get("zone_id", "")).startswith(("T", "H", "L"))
     ]})
 
 
@@ -100,12 +107,23 @@ def decide(event):
         sfn.send_task_success(taskToken=item["task_token"], output=json.dumps(output))
     except ClientError as exc:
         if exc.response["Error"]["Code"] in ("TaskTimedOut", "TaskDoesNotExist", "InvalidToken"):
-            approvals.update_item(Key={"approval_id": approval_id}, UpdateExpression="SET #s = :a",
-                                  ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":a": "AUTO_ISSUED"})
-            return respond(409, {"error": "approval window expired; the alert was issued automatically"})
+            status = finish(approval_id, "AUTO_ISSUED")
+            return respond(409, {"error": "approval window expired; the workflow already acted", "status": status})
         raise
-    approvals.update_item(Key={"approval_id": approval_id}, UpdateExpression="SET #s = :d",
-                          ExpressionAttributeNames={"#s": "status"},
-                          ExpressionAttributeValues={":d": "APPROVED" if decision == "approve" else "REJECTED"})
-    log("approval_decided", approval_id=approval_id, decision=decision, officer=officer)
-    return respond(200, {"approval_id": approval_id, "decision": decision})
+    status = finish(approval_id, "APPROVED" if decision == "approve" else "REJECTED")
+    log("approval_decided", approval_id=approval_id, decision=decision, officer=officer, status=status)
+    return respond(200, {"approval_id": approval_id, "decision": decision, "status": status})
+
+
+def finish(approval_id, status):
+    """Set the final status unless the workflow already settled it (e.g. SUPERSEDED by a higher tier).
+    Returns the status the approval ends with."""
+    try:
+        approvals.update_item(Key={"approval_id": approval_id}, UpdateExpression="SET #s = :n",
+                              ConditionExpression="#s = :deciding", ExpressionAttributeNames={"#s": "status"},
+                              ExpressionAttributeValues={":n": status, ":deciding": "DECIDING"})
+        return status
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        return approvals.get_item(Key={"approval_id": approval_id}, ConsistentRead=True)["Item"]["status"]

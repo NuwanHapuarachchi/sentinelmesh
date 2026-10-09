@@ -19,10 +19,13 @@ from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
 sfn = boto3.client("stepfunctions")
+lam = boto3.client("lambda")
 zones_table = ddb.Table(os.environ["ZONES_TABLE"])
 state_table = ddb.Table(os.environ["STATE_TABLE"])
 CELL = os.environ["CELL"]
 STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN", "")
+PUBLIC_FEED_FUNCTION = os.environ.get("PUBLIC_FEED_FUNCTION", "")
+HEARTBEAT_PREFIX = "H"
 _deser = TypeDeserializer()
 
 
@@ -39,10 +42,10 @@ def handler(event, context):
         obs = {k: _deser.deserialize(v) for k, v in image.items()}
         by_zone.setdefault(obs["zone_id"], []).append(obs)
 
-    failures = []
+    failures, changed = [], False
     for zone_id, observations in by_zone.items():
         try:
-            score_zone(zone_id, observations, now)
+            changed |= bool((score_zone(zone_id, observations, now) or {}).get("changed"))
             oldest = min(int(o.get("rx_ms", now * 1000)) for o in observations)
             metric("ScoreLatencyMs", now * 1000 - oldest, "Milliseconds", Cell=CELL)
         except Exception as exc:  # report the zone's records as failed so only they are retried
@@ -52,18 +55,35 @@ def handler(event, context):
                 for r in event["Records"]
                 if r.get("dynamodb", {}).get("Keys", {}).get("zone_id", {}).get("S") == zone_id
             ]
+    if changed:
+        refresh_public_feed()
     return {"batchItemFailures": failures}
 
 
 def watchdog(now):
-    """Re-score this cell's zones with no new data so decay, de-escalation and silence detection still run."""
-    zones = zones_table.scan(FilterExpression="owner_cell = :c", ExpressionAttributeValues={":c": CELL})["Items"]
-    blind = 0
+    """Re-score this cell's zones with no new data so decay, de-escalation and silence detection still run.
+    BlindZones counts real zones only: hidden test, heartbeat and load zones go quiet by design."""
+    zones, kwargs = [], {"FilterExpression": "owner_cell = :c", "ExpressionAttributeValues": {":c": CELL}}
+    while True:
+        page = zones_table.scan(**kwargs)
+        zones += page["Items"]
+        if "LastEvaluatedKey" not in page:
+            break
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    blind = test_blind = 0
+    any_changed = False
     for zone in zones:
         state = score_zone(zone["zone_id"], [], now, zone=zone, only_if_known=True)
-        blind += bool(state and state.get("blind"))
+        is_blind = bool(state and state.get("blind"))
+        any_changed |= bool(state and state.get("changed"))
+        if zone.get("is_test"):
+            test_blind += is_blind
+        else:
+            blind += is_blind
     metric("BlindZones", blind, Cell=CELL)
-    return {"zones": len(zones), "blind": blind}
+    if any_changed:
+        refresh_public_feed()
+    return {"zones": len(zones), "blind": blind, "blind_test_zones": test_blind}
 
 
 def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
@@ -89,6 +109,11 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
         # same execution name and Step Functions collapses the duplicate.
         if went_up and sc.RANK[tier] >= sc.RANK["advisory"]:
             start_escalation(zone, tier, assessment, doc, observations, drill, now)
+        # Falling below advisory closes the alert episode. If an alert went out, ask for an all-clear.
+        ended = sc.RANK[tier] < sc.RANK["advisory"] <= sc.RANK[previous_tier]
+        # Heartbeat zones alert every few minutes by design; nobody needs to confirm their all-clears.
+        if ended and item.get("last_alert_id") and not zone_id.startswith(HEARTBEAT_PREFIX):
+            start_clear(zone, assessment, doc, item["last_alert_id"], now)
         if tier != previous_tier:
             metric("TierChange", 1, Cell=CELL, Tier=tier)
             log("tier_change", zone_id=zone_id, cell=CELL, frm=previous_tier, to=tier, score=assessment.score,
@@ -97,9 +122,9 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
         doc["contributions"], doc["agreeing"], doc["reason"] = assessment.contributions, assessment.agreeing, assessment.reason
         update = ("SET version = :nv, tier = :t, score = :s, blind = :b, hazard = :h, doc = :d, "
                   "updated_at = :u, eval_cell = :c, district = :dist")
-        # Falling below advisory closes the alert episode: clear the workflow's de-duplication gate.
-        if sc.RANK[tier] < sc.RANK["advisory"] <= sc.RANK[previous_tier]:
-            update += " REMOVE alert_rank, alert_tier, alert_exec"
+        # The episode's end also clears the workflow's de-duplication gate and the alert the all-clear covers.
+        if ended:
+            update += " REMOVE alert_rank, alert_tier, alert_exec, alert_confirmed_at, last_alert_id"
         try:
             state_table.update_item(
                 Key={"zone_id": zone_id},
@@ -111,11 +136,55 @@ def score_zone(zone_id, observations, now, zone=None, only_if_known=False):
                     ":c": CELL, ":dist": zone.get("district", ""),
                 },
             )
-            return {"tier": tier, "blind": assessment.blind}
+            # "changed" drives the public map refresh, which only shows real zones.
+            return {"tier": tier, "blind": assessment.blind, "changed": tier != previous_tier and not zone.get("is_test")}
         except ClientError as exc:
             if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
     raise RuntimeError(f"state update conflict for {zone_id}")
+
+
+def refresh_public_feed():
+    """Rebuild the public map file now rather than at its next minute (best effort: it also runs on a schedule)."""
+    if not PUBLIC_FEED_FUNCTION:
+        return
+    try:
+        lam.invoke(FunctionName=PUBLIC_FEED_FUNCTION, InvocationType="Event", Payload=b"{}")
+    except ClientError as exc:
+        log("public_feed_refresh_failed", error=str(exc))
+
+
+def start_clear(zone, assessment, doc, last_alert_id, now):
+    """Ask for an all-clear for the alert this episode issued. The workflow waits for an officer (twice the
+    zone's approval window) and sends nothing if nobody confirms. The issuer takes the hazard and drill status
+    from the alert being cleared."""
+    if not STATE_MACHINE_ARN:
+        return
+    payload = {
+        "zone_id": zone["zone_id"],
+        "tier": "clear",
+        "hazard": assessment.hazard,
+        "reason": "de-escalated",
+        "score": assessment.score,
+        "contributions": assessment.contributions,
+        "agreeing": assessment.agreeing,
+        "blind": assessment.blind,
+        "evidence": doc["ev"],
+        "episode": doc["episode"],
+        "is_test": bool(zone.get("is_test")),
+        "approval_timeout_s": 2 * int(zone.get("approval_timeout_s", 300)),
+        "trigger_rx_ms": int(now * 1000),
+        "origin": "scorer",
+        "cell": CELL,
+        "references": [last_alert_id],
+    }
+    name = sc.execution_name(zone["zone_id"], "clear", doc["episode"], doc.get("episode_started", 0))
+    try:
+        sfn.start_execution(stateMachineArn=STATE_MACHINE_ARN, name=name, input=json.dumps(payload))
+        log("all_clear_requested", zone_id=zone["zone_id"], clears=last_alert_id, execution=name)
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ExecutionAlreadyExists":
+            raise
 
 
 def start_escalation(zone, tier, assessment, doc, observations, drill, now):

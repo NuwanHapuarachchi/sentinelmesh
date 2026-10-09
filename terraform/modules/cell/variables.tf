@@ -38,6 +38,8 @@ variable "delivery" {
     approvals          = object({ name = string, arn = string })
     subscribers        = object({ name = string, arn = string })
     inbox              = object({ name = string, arn = string })
+    deliveries         = object({ name = string, arn = string })
+    meta               = object({ name = string, arn = string })
     web_bucket         = object({ name = string, arn = string })
     decisions_bucket   = object({ name = string, arn = string })
     approvals_fn_arn   = string
@@ -60,4 +62,20 @@ variable "rules_version" {
 
 variable "evidence_bucket" {
   type = object({ name = string, arn = string })
+}
+
+variable "public_feed" {
+  description = "Function that rebuilds the public map file; the scorer invokes it when a tier changes."
+  type        = object({ name = string, arn = string })
+}
+
+variable "iot_endpoint" {
+  description = "IoT data endpoint; the issuer tells district nodes about alerts on sm/alerts/<district>."
+  type        = string
+}
+
+variable "log_retention_days" {
+  description = "Retention for the cell's own log groups (IoT rule errors, workflow)."
+  type        = number
+  default     = 14
 }

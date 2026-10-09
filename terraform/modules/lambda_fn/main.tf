@@ -47,13 +47,20 @@ variable "memory" {
   default = 256
 }
 
+variable "log_retention_days" {
+  description = "Logs are kept this long, then deleted (data minimisation; the evidence lake holds the observations)."
+  type        = number
+  default     = 14
+}
+
 data "aws_region" "current" {}
 data "aws_caller_identity" "current" {}
 
 # The function writes only to this group; it has no logs:CreateLogGroup, so nothing can
 # recreate the group after destroy.
 resource "aws_cloudwatch_log_group" "this" {
-  name = "/aws/lambda/${var.name}"
+  name              = "/aws/lambda/${var.name}"
+  retention_in_days = var.log_retention_days
 }
 
 resource "aws_iam_role" "this" {

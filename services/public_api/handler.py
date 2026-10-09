@@ -1,14 +1,21 @@
 """Public API (no login; WAF rate limits in front):
 
-POST /reports            citizen report -> IoT topic (phone kept only as a salted hash)
-GET  /public/zones       zone tiers for the public map (no evidence, no people data)
-POST /phone/subscribe    simulated handset opts in: zone, language, ~1 km geohash cell
-GET  /phone/inbox        handset's messages (X-Device-Token required)
-POST /phone/ack          handset confirms receipt -> delivery receipt + time-to-first-alert
-POST /sms/dlr            third-party SMS delivery report (shared secret)
+POST   /reports              citizen report -> IoT topic (phone kept only as a salted hash)
+GET    /public/zones         zone tiers for the public map (no evidence, no people data)
+POST   /phone/verify/start   text a 6-digit code to a number before it may receive alerts by SMS
+POST   /phone/verify/finish  check the code -> short-lived verification token for that number
+POST   /phone/subscribe      handset opts in: zone, language, ~1 km geohash cell, and optionally a verified number
+DELETE /phone/subscribe      handset withdraws consent: its record is erased (X-Device-Token required)
+GET    /phone/inbox          handset's messages (X-Device-Token required)
+POST   /phone/ack            handset confirms receipt -> delivery receipt + time-to-first-alert
+POST   /sms/dlr              third-party SMS delivery report (shared secret)
 
-Environment: ZONES_TABLE, STATE_TABLE, SUBSCRIBERS_TABLE, INBOX_TABLE, ALERTS_TABLE,
-RATELIMITS_TABLE, IOT_ENDPOINT, REPORT_PEPPER, SMS_SECRET_ARN.
+Phone numbers are stored only after the owner proves they hold the phone (the code), only for subscribers
+who asked for SMS, with the consent version and time, and are deleted on unsubscribe.
+
+Environment: ZONES_TABLE, STATE_TABLE, SUBSCRIBERS_TABLE, INBOX_TABLE, ALERTS_TABLE, RATELIMITS_TABLE,
+DELIVERIES_TABLE, IOT_ENDPOINT, REPORT_PEPPER_SECRET_ARN, SMS_SECRET_ARN, SMS_PROVIDER (+ the provider's
+settings, see common/sms.py), REAL_SMS_ALLOWLIST (optional: comma-separated numbers allowed real SMS).
 """
 
 import hashlib
@@ -16,33 +23,39 @@ import hmac
 import json
 import os
 import re
+import secrets as rand
 import time
 import uuid
-from decimal import Decimal
 
 import boto3
 from boto3.dynamodb.conditions import Key
-from botocore.exceptions import ClientError
 
-from common import sms
+from common import receipts, sms
 from common.api import respond
 from common.observe import log, metric
 
 ddb = boto3.resource("dynamodb")
 iot = boto3.client("iot-data", endpoint_url=f"https://{os.environ['IOT_ENDPOINT']}")
 secrets = boto3.client("secretsmanager")
+_pepper = {}
 zones = ddb.Table(os.environ["ZONES_TABLE"])
 states = ddb.Table(os.environ["STATE_TABLE"])
 subscribers = ddb.Table(os.environ["SUBSCRIBERS_TABLE"])
 inbox = ddb.Table(os.environ["INBOX_TABLE"])
 alerts = ddb.Table(os.environ["ALERTS_TABLE"])
 limits = ddb.Table(os.environ["RATELIMITS_TABLE"])
+deliveries = ddb.Table(os.environ["DELIVERIES_TABLE"])
 
 ZONE_RE = re.compile(r"^[ZTH]\d{2}$")
 GEOHASH_RE = re.compile(r"^[0-9b-hjkmnp-z]{6}$")
 REPORT_KINDS = {"flooding", "water_rising", "landslide", "crack"}
 LANGS = {"en", "si", "ta"}
 REPORTS_PER_10_MIN = 3
+CONSENT_VERSION = "2026-10"  # what the phone page tells people they agree to
+OTP_TTL_S, OTP_PER_HOUR, OTP_ATTEMPTS, VERIFIED_TTL_S = 600, 3, 5, 600
+SL_MOBILE = re.compile(r"^\+947\d{8}$")
+PROVIDER = os.environ.get("SMS_PROVIDER", "simulator")
+_eum = {}
 
 
 def handler(event, context):
@@ -53,8 +66,14 @@ def handler(event, context):
             return report(body)
         if route == ("GET", "/public/zones"):
             return public_zones()
+        if route == ("POST", "/phone/verify/start"):
+            return verify_start(body)
+        if route == ("POST", "/phone/verify/finish"):
+            return verify_finish(body)
         if route == ("POST", "/phone/subscribe"):
             return subscribe(body)
+        if route == ("DELETE", "/phone/subscribe"):
+            return unsubscribe(event)
         if route == ("GET", "/phone/inbox"):
             return phone_inbox(event)
         if route == ("POST", "/phone/ack"):
@@ -71,8 +90,16 @@ def require(cond, message):
         raise ValueError(message)
 
 
+def pepper():
+    """The reporter-hash key, from Secrets Manager (not a plain environment variable anyone reading the
+    function's configuration could see). Cached for the life of the container."""
+    if "v" not in _pepper:
+        _pepper["v"] = secrets.get_secret_value(SecretId=os.environ["REPORT_PEPPER_SECRET_ARN"])["SecretString"]
+    return _pepper["v"]
+
+
 def reporter_hash(phone):
-    return hmac.new(os.environ["REPORT_PEPPER"].encode(), sms.normalise_msisdn(phone).encode(), hashlib.sha256).hexdigest()[:24]
+    return hmac.new(pepper().encode(), sms.normalise_msisdn(phone).encode(), hashlib.sha256).hexdigest()[:24]
 
 
 def report(body):
@@ -116,14 +143,103 @@ def subscribe(body):
     require(GEOHASH_RE.match(geohash6), "geohash6 must be a 6-character geohash (about 1 km); never send coordinates")
     token = body.get("device_token", "")
     require(len(token) >= 16, "device_token required")
-    sid = f"sim-{uuid.uuid4().hex[:12]}"
-    subscribers.put_item(Item={
-        "subscriber_id": sid, "zone_id": zone_id, "lang": lang, "geohash6": geohash6,
-        "device_token_sha256": hashlib.sha256(token.encode()).hexdigest(), "consent": "demo-opt-in",
-        "created_at": int(time.time()),
-    })
-    log("subscribed", subscriber_id=sid, zone_id=zone_id, lang=lang)
-    return respond(201, {"subscriber_id": sid})
+    item = {
+        "subscriber_id": f"sim-{uuid.uuid4().hex[:12]}", "zone_id": zone_id, "lang": lang, "geohash6": geohash6,
+        "device_token_sha256": hashlib.sha256(token.encode()).hexdigest(), "consent": CONSENT_VERSION,
+        "consent_at": int(time.time()), "created_at": int(time.time()),
+    }
+    if body.get("msisdn"):  # SMS too: only for a number its owner has just verified
+        msisdn = sms.normalise_msisdn(body["msisdn"])
+        require(verified(msisdn, body.get("verify_token", "")), "verify the phone number first")
+        item |= {"msisdn": msisdn, "channels": "sms"}
+    subscribers.put_item(Item=item)
+    log("subscribed", subscriber_id=item["subscriber_id"], zone_id=zone_id, lang=lang, sms=bool(item.get("msisdn")))
+    return respond(201, {"subscriber_id": item["subscriber_id"], "sms": bool(item.get("msisdn"))})
+
+
+def unsubscribe(event):
+    """Withdraw consent: the subscriber record (and with it any phone number) is erased."""
+    sub = _owner(event)
+    if not sub:
+        return respond(403, {"error": "unknown handset"})
+    subscribers.delete_item(Key={"subscriber_id": sub["subscriber_id"]})
+    log("unsubscribed", subscriber_id=sub["subscriber_id"])
+    return respond(200, {"unsubscribed": True})
+
+
+def _otp_key(msisdn):
+    return hmac.new(pepper().encode(), msisdn.encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def _code_hash(msisdn, code):
+    return hmac.new(pepper().encode(), f"{msisdn}|{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def verified(msisdn, token):
+    """A token from verify_finish: '<expiry>.<hmac(number, expiry)>'."""
+    expiry, _, mac = str(token).partition(".")
+    if not expiry.isdigit() or int(expiry) < time.time():
+        return False
+    expected = hmac.new(pepper().encode(), f"verified|{msisdn}|{expiry}".encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(mac, expected)
+
+
+def allowed(msisdn):
+    allow = {sms.normalise_msisdn(n) for n in os.environ.get("REAL_SMS_ALLOWLIST", "").split(",") if n.strip()}
+    return not allow or msisdn in allow
+
+
+def send_code(msisdn, code):
+    text = f"SentinelMesh code {code}. It expires in 10 minutes. Ignore this if you did not ask for it."
+    if PROVIDER == "eum":
+        if "c" not in _eum:
+            _eum["c"] = boto3.client("pinpoint-sms-voice-v2")
+        return sms.send_eum(msisdn, text, "verify", _eum["c"], os.environ.get("EUM_ORIGINATION_IDENTITY"),
+                            os.environ.get("EUM_CONFIGURATION_SET"))
+    if PROVIDER == "http":
+        secret = json.loads(secrets.get_secret_value(SecretId=os.environ["SMS_SECRET_ARN"])["SecretString"])
+        return sms.send_http(msisdn, text, "verify", secret)
+    return {"status": "SIMULATED"}
+
+
+def verify_start(body):
+    msisdn = sms.normalise_msisdn(body.get("msisdn", ""))
+    require(SL_MOBILE.match(msisdn), "a Sri Lankan mobile number is needed, e.g. 0771234567")
+    if not allowed(msisdn):
+        return respond(403, {"error": "real SMS is limited to the demo phones"})
+    key = _otp_key(msisdn)
+    count = limits.update_item(
+        Key={"k": f"otp-rate#{key}#{int(time.time() // 3600)}"}, UpdateExpression="ADD n :one SET expires_at = :exp",
+        ExpressionAttributeValues={":one": 1, ":exp": int(time.time()) + 7200}, ReturnValues="UPDATED_NEW",
+    )["Attributes"]["n"]
+    if count > OTP_PER_HOUR:
+        return respond(429, {"error": "too many codes for this number; try again later"})
+    code = f"{rand.randbelow(10**6):06d}"
+    limits.put_item(Item={"k": f"otp#{key}", "code": _code_hash(msisdn, code), "attempts": 0,
+                          "expires_at": int(time.time()) + OTP_TTL_S})
+    result = send_code(msisdn, code)
+    if result["status"] == "SIMULATED":
+        # No SMS provider in this stack: hand the code back, clearly labelled, so the demo phone can continue.
+        return respond(202, {"sent": False, "simulator_code": code})
+    if result["status"] != "SENT":
+        return respond(502, {"error": "the code could not be sent; try again"})
+    return respond(202, {"sent": True})
+
+
+def verify_finish(body):
+    msisdn = sms.normalise_msisdn(body.get("msisdn", ""))
+    code = str(body.get("code", ""))
+    item = limits.get_item(Key={"k": f"otp#{_otp_key(msisdn)}"}, ConsistentRead=True).get("Item")
+    if not item or int(item["expires_at"]) < time.time() or int(item["attempts"]) >= OTP_ATTEMPTS:
+        return respond(400, {"error": "no valid code for this number; ask for a new one"})
+    if not hmac.compare_digest(item["code"], _code_hash(msisdn, code)):
+        limits.update_item(Key={"k": f"otp#{_otp_key(msisdn)}"}, UpdateExpression="ADD attempts :one",
+                           ExpressionAttributeValues={":one": 1})
+        return respond(400, {"error": "wrong code"})
+    limits.delete_item(Key={"k": f"otp#{_otp_key(msisdn)}"})
+    expiry = int(time.time()) + VERIFIED_TTL_S
+    mac = hmac.new(pepper().encode(), f"verified|{msisdn}|{expiry}".encode(), hashlib.sha256).hexdigest()
+    return respond(200, {"verify_token": f"{expiry}.{mac}"})
 
 
 def _owner(event):
@@ -150,27 +266,8 @@ def ack(event, body):
 
 
 def receipt(subscriber_id, sk, channel):
-    now = time.time()
-    try:
-        item = inbox.update_item(
-            Key={"subscriber_id": subscriber_id, "sk": sk}, UpdateExpression="SET acked_at = :t",
-            ConditionExpression="attribute_exists(sk) AND attribute_not_exists(acked_at)",
-            ExpressionAttributeValues={":t": int(now * 1000)}, ReturnValues="ALL_NEW",
-        )["Attributes"]
-    except ClientError as exc:
-        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            return respond(200, {"duplicate": True})
-        raise
-    ttfa_ms = now * 1000 - int(item["trigger_rx_ms"])
-    first = alerts.update_item(
-        Key={"alert_id": item["alert_id"], "sk": "META"},
-        UpdateExpression="ADD delivered :one SET first_receipt_ms = if_not_exists(first_receipt_ms, :ms)",
-        ExpressionAttributeValues={":one": 1, ":ms": Decimal(int(ttfa_ms))}, ReturnValues="ALL_NEW",
-    )["Attributes"]
-    metric("DeliveryReceipts", 1, Channel=channel, Tier=item["tier"])
-    if int(first.get("delivered", 0)) == 1:  # first confirmed delivery for this alert
-        metric("TimeToFirstAlertMs", ttfa_ms, "Milliseconds", Tier=item["tier"])
-    return respond(200, {"acknowledged": True, "ttfa_ms": int(ttfa_ms)})
+    out = receipts.record(inbox, deliveries, alerts, subscriber_id, sk, channel)
+    return respond(200, out)
 
 
 def dlr(event, body):
@@ -182,10 +279,10 @@ def dlr(event, body):
     ref, status = sms.parse_dlr(params)
     if not ref or "|" not in ref:
         return respond(400, {"error": "missing ref"})
-    alert_id, subscriber_id = ref.split("|", 1)
     metric("SmsDeliveryReports", 1, Status=status)
+    if status == "FAILED":
+        receipts.undelivered(deliveries, ref, status)
     if status != "DELIVERED":
         return respond(200, {"status": status})
-    msgs = inbox.query(KeyConditionExpression=Key("subscriber_id").eq(subscriber_id))["Items"]
-    match = next((m for m in msgs if m["alert_id"] == alert_id), None)
-    return receipt(subscriber_id, match["sk"], "sms") if match else respond(200, {"status": status})
+    out = receipts.record_for_ref(inbox, deliveries, alerts, ref, "sms")
+    return respond(200, out if "acknowledged" in out or "duplicate" in out else {"status": status})

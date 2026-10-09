@@ -19,6 +19,7 @@ spec:
 ---
 include:
   - template: Jobs/SAST-IaC.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
 
 workflow:
   rules:
@@ -127,7 +128,7 @@ py-lint:
     - when: on_success
   script:
     - pip install -q ruff==0.14.0
-    - ruff check services tests scripts
+    - ruff check services tests scripts edge
 
 unit-tests:
   extends: .py
@@ -149,8 +150,26 @@ unit-tests:
         coverage_format: cobertura
         path: coverage.xml
 
-# The IaC security scan only needs to run when code changes, not on apply/destroy runs.
+# Web pages: syntax of every script, then the phone's delivery channels in a stub browser.
+web-tests:
+  image: node:22-alpine
+  stage: test
+  interruptible: true
+  rules:
+    - if: $ACTION == "destroy"
+      when: never
+    - when: on_success
+  script:
+    - for f in web/*.js; do node --check "$f"; done
+    - node --test tests/web/*.test.mjs
+
+# The IaC security scan and the committed-secrets scan only need to run when code changes, not on
+# apply/destroy runs.
 kics-iac-sast:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
+
+secret_detection:
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "merge_request_event"
 
@@ -251,6 +270,54 @@ load-test:
     - !reference [.aws_auth, script]
     - pip install -q -r tests/requirements.txt
     - python tests/load/burst.py
+    - python tests/load/dispatch_burst.py
+
+# Writes the SMS gateway key, sender id and delivery-report secret from masked CI/CD variables into
+# Secrets Manager (Terraform only creates an empty placeholder, so keys never enter Terraform state).
+configure-secrets:
+  extends: .py
+  stage: verify
+  needs: []
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $STACK == "app" && $ACTION != "destroy"
+      when: manual
+      allow_failure: true
+  script:
+    - !reference [.aws_auth, script]
+    - pip install -q boto3==1.40.40
+    - python scripts/put_secrets.py
+
+# Loses cell a for real (consumers and IoT rules off), proves the gap, fails over to standby c and times the
+# recovery; always restores. GAMEDAY_SCOPE=cell moves the whole cell's zones, as a real loss would.
+gameday:
+  extends: .py
+  stage: verify
+  needs: []
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $STACK == "app" && $ACTION != "destroy"
+      when: manual
+      allow_failure: true
+  script:
+    - !reference [.aws_auth, script]
+    - pip install -q boto3==1.40.40
+    - python scripts/gameday.py --scope "${GAMEDAY_SCOPE:-zone}"
+
+# Read-only: walks the decision-record hash chain and fails if anything was changed, deleted or left out.
+verify-decisions:
+  extends: .py
+  stage: verify
+  needs: []
+  rules:
+    - !reference [.aws_rules, rules]
+    - if: $STACK == "app" && $ACTION != "destroy"
+      when: manual
+      allow_failure: true
+  script:
+    - !reference [.aws_auth, script]
+    - pip install -q boto3==1.40.40
+    - python scripts/verify_decisions.py
 
 verify-teardown:
   extends: .py

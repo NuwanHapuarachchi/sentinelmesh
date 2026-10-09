@@ -40,6 +40,12 @@ def app_leftovers():
     found += [f"iot rule: {n}" for n in by_prefix(r["ruleName"] for r in iot.list_topic_rules()["rules"])]
     found += [f"iot thing: {n}" for n in by_prefix(t["thingName"] for t in iot.list_things()["things"])]
     found += [f"iot policy: {n}" for n in by_prefix(p["policyName"] for p in iot.list_policies()["policies"])]
+    found += [f"iot role alias: {n}" for n in by_prefix(iot.list_role_aliases()["roleAliases"])]
+    try:  # only used with TF_VAR_sms_provider=eum; the service may not be enabled in the account
+        sets = s.client("pinpoint-sms-voice-v2").describe_configuration_sets()["ConfigurationSets"]
+        found += [f"sms configuration set: {n}" for n in by_prefix(c["ConfigurationSetName"] for c in sets)]
+    except Exception as exc:  # noqa: BLE001 - absent or blocked service means nothing of ours exists there
+        print(f"(skipped SMS configuration sets: {type(exc).__name__})")
     found += [f"states: {n}" for n in by_prefix(m["name"] for m in s.client("stepfunctions").list_state_machines()["stateMachines"])]
     found += [f"sqs: {u}" for u in s.client("sqs").list_queues(QueueNamePrefix=PREFIX).get("QueueUrls", [])]
     found += [f"sns: {t['TopicArn']}" for t in s.client("sns").list_topics()["Topics"] if f":{PREFIX}" in t["TopicArn"]]

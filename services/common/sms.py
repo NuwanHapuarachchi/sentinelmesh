@@ -1,6 +1,10 @@
 """SMS provider adapter.
 
 SMS_PROVIDER=simulator (default): the message is written to the simulated handset inbox.
+SMS_PROVIDER=eum: AWS End User Messaging SMS (send_eum). Our reference travels in the message Context and
+comes back in the delivery events (parse_eum_event), which the sms_events function turns into receipts.
+  EUM_ORIGINATION_IDENTITY  sender id, phone number or pool to send from (optional in the sandbox)
+  EUM_CONFIGURATION_SET     configuration set whose event destination publishes delivery events
 SMS_PROVIDER=http: a third-party gateway, configured by environment variables plus a Secrets
 Manager secret (JSON: {"api_key": ..., "sender_id": ..., "dlr_secret": ...}) so no key ever
 sits in Terraform state:
@@ -120,3 +124,42 @@ def parse_dlr(params):
 
 def dlr_secret_ok(provided, expected):
     return bool(provided) and bool(expected) and hmac.compare_digest(str(provided), str(expected))
+
+
+# ---------- AWS End User Messaging SMS ----------
+
+# Errors worth retrying later (the sender leaves the recipient FAILED and SQS retries the batch).
+EUM_TRANSIENT = {"ThrottlingException", "InternalServerException", "ServiceQuotaExceededException"}
+
+
+def send_eum(to, text, ref, client, origination_identity=None, configuration_set=None):
+    """Send one transactional SMS. Returns {"status": SENT|FAILED|REJECTED, ...} like send_http."""
+    request = {"DestinationPhoneNumber": normalise_msisdn(to), "MessageBody": text, "MessageType": "TRANSACTIONAL",
+               "Context": {"ref": ref}}
+    if origination_identity:
+        request["OriginationIdentity"] = origination_identity
+    if configuration_set:
+        request["ConfigurationSetName"] = configuration_set
+    try:
+        return {"status": "SENT", "provider_id": client.send_text_message(**request)["MessageId"]}
+    except Exception as exc:  # botocore ClientError
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code", type(exc).__name__)
+        return {"status": "FAILED" if code in EUM_TRANSIENT else "REJECTED", "error": code}
+
+
+# messageStatus values that are final failures; DELIVERED means the handset accepted the message, the rest
+# (SUCCESSFUL = accepted by the carrier, PENDING, QUEUED, SENT, ACCEPTED) are progress, not receipts.
+EUM_FAILED = {"INVALID", "UNREACHABLE", "BLOCKED", "CARRIER_UNREACHABLE", "SPAM", "INVALID_MESSAGE", "CARRIER_BLOCKED",
+              "TTL_EXPIRED", "FAILED", "UNROUTABLE", "PROTECT_BLOCKED"}
+
+
+def parse_eum_event(event):
+    """An End User Messaging SMS event -> (ref, outcome, network status); outcome is DELIVERED, FAILED or None."""
+    status = str(event.get("messageStatus", "")).upper()
+    ref = (event.get("context") or {}).get("ref")
+    if status == "DELIVERED":
+        return ref, "DELIVERED", status
+    if status in EUM_FAILED or (status == "UNKNOWN" and event.get("isFinal")):
+        return ref, "FAILED", status
+    return ref, None, status
+

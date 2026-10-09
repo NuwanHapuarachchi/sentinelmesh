@@ -8,18 +8,24 @@ Everything is Terraform and everything runs in GitLab CI/CD. Nobody provisions f
 
 | Path | What |
 |---|---|
-| `terraform/bootstrap/` | The pipeline's own AWS identity: CI user, deploy role, workload permissions boundary, and the GitLab CI variables that hold the CI key |
-| `terraform/app/` | The prototype (root module) |
-| `terraform/modules/` | `shared`, and later `cell`, `api`, `web`, `observability` |
+| `terraform/bootstrap/` | The pipeline's own AWS identity: CI user, deploy role (limited to roles that carry the workload boundary), and the GitLab CI variables that hold the CI key |
+| `terraform/app/` | The prototype (root module): API, web, delivery, operations, and the three cells |
+| `terraform/modules/` | `shared` (tables, buckets), `cell` (one detection and delivery cell), `lambda_fn` (one function with its own role and logs) |
 | `services/` | Lambda code (Python 3.13, stdlib + boto3) |
 | `web/` | Dashboard, officer console, simulated phone |
-| `tests/unit`, `tests/e2e`, `tests/load` | Tests run by the pipeline |
-| `scripts/gen_zones.py` | Generates the 80 hazard zones + test zones |
+| `edge/` | Programs that run outside AWS: `field_gateway.py` (a simulated station with its own X.509 certificate) and the standard-library MQTT client they share |
+| `tests/unit`, `tests/web`, `tests/e2e`, `tests/load` | Tests run by the pipeline (unit with moto, the phone page in Node, live end-to-end, burst) |
+| `scripts/gen_zones.py` | Generates the 80 hazard zones + test, heartbeat and load zones |
+| `scripts/put_secrets.py` | Writes SMS gateway credentials into Secrets Manager (configure-secrets job) |
 | `scripts/verify_teardown.py` | Read-only check that nothing is left after a destroy |
+
+## Cells
+
+Cells `a` and `b` each own 40 zones; cell `c` is a warm standby that owns none. Each cell is a full copy of the detection and delivery path (observation table and stream, scorer, escalation workflow, issuer, dispatch planner, senders, queues). Failover is a data change: the console's "Cell A lost" moves A's zones to C in the zones table and the IoT rules route the next reading there. Heartbeat zones H00, H01 and H02 send a test alert through each cell every 10 minutes, so every cell, including the standby, is proven to work.
 
 ## Account rules
 
-- Region `ap-southeast-2` only (organization policy).
+- Region `ap-southeast-2` only (organization policy). Kinesis is blocked, so the observation bus is a DynamoDB table and stream.
 - No retention anywhere: no Object Lock, no customer-managed KMS keys, no PITR, secrets deleted immediately. `terraform destroy` removes everything.
 
 ## Running the pipeline
@@ -39,7 +45,7 @@ Or from a terminal:
 glab ci run -b main --input stack:string(app) --input action:string(apply)
 ```
 
-Pushes to `main` run lint, unit tests, the IaC scan and an app plan. Other branches and MRs run lint and tests only; they never get AWS credentials.
+Pushes to `main` run lint, unit and web tests, the IaC and secret scans and an app plan. Other branches and MRs run lint, tests and scans only; they never get AWS credentials.
 
 ## One-time setup
 
@@ -48,10 +54,48 @@ Pushes to `main` run lint, unit tests, the IaC scan and an app plan. Other branc
 3. Run the pipeline with `stack=bootstrap`, `action=apply`. Terraform creates the CI user and deploy role and writes `SM_AWS_ACCESS_KEY_ID`, `SM_AWS_SECRET_ACCESS_KEY` and `SM_AWS_DEPLOY_ROLE_ARN` into the project variables.
 4. Delete the temporary admin key and the `BOOTSTRAP_*` variables.
 
-Optional variables: `TF_VAR_officer_email` (alerts and Cognito invite), `SMS_PROVIDER_URL` and `SMS_PROVIDER_API_KEY` (third-party SMS, later).
+Bootstrap does not need the app stack to exist, so this order works on a fresh account. The deploy role can create the workload permissions boundary (`terraform/app/iam.tf`) but is denied new versions of it, so it can never widen its own limits. To change the boundary, run the app stack once as an admin (temporarily add the `BOOTSTRAP_*` key and remove `SM_AWS_DEPLOY_ROLE_ARN`).
+
+Optional variables: `TF_VAR_officer_email` (alarm and budget emails), `TF_VAR_officers` (console logins, see below), and for a real third-party SMS gateway `TF_VAR_sms_provider_url` (plus `TF_VAR_sms_http_options`, see `services/common/sms.py`).
+
+`TF_VAR_officers` is a JSON map of email to role, for example `{"duty@team.example": "duty_officer", "met@team.example": "met", "ems@team.example": "ems:Kegalle", "ngo@team.example": "ngo"}`. Roles: `duty_officer` (everything, plus approvals, drills and failover), `met` (all zones with sensor evidence, alerts without people counts), `ems:District` (one district, no evidence), `ngo` and `viewer` (counts per district). The API enforces this (`services/console_api/handler.py`); passwords are generated and stored in Secrets Manager (`sentinelmesh/officer-logins`).
+
+The gateway's credentials never go through Terraform: add `SMS_PROVIDER_API_KEY` (and optionally `SMS_SENDER_ID`, `SMS_DLR_SECRET`) as masked, protected variables and run the manual **configure-secrets** job on `main`, which writes them into Secrets Manager. If `SMS_DLR_SECRET` is not set, one is generated; read it in Secrets Manager (`sentinelmesh/sms-provider`) to configure the gateway's delivery reports.
+
+## Real SMS with AWS End User Messaging
+
+Set `TF_VAR_sms_provider` to `eum` and apply: senders send through AWS End User Messaging SMS (the successor of Pinpoint's SMS APIs), and a configuration set publishes delivery events through SNS to `sms_events`, which records receipts and failures in the delivery ledger. New accounts are in the SMS sandbox, so first add and verify the team's phones as destination numbers in the AWS End User Messaging SMS console (one-time, not Terraform). Optionally set `TF_VAR_eum_origination_identity` to a registered sender ID or number. Only subscribers with a verified phone number get real SMS; everyone else keeps the simulated inbox and the broadcast.
+
+## Field devices
+
+Stations `sentinelmesh-gauge-Z07`, `-Z35` and `-T01` are IoT things with their own certificates (`terraform/app/iot.tf`). Each may connect only as itself and publish only to `sm/dev/{its zone}/{its class}`; the routing rules take the class and source from the topic and certificate, not the payload. Run one with your AWS credentials (it reads its certificate from Secrets Manager):
+
+```bash
+python edge/field_gateway.py --thing sentinelmesh-gauge-Z07 --profile rising
+```
+
+To show revocation, set `TF_VAR_revoked_devices` to `["sentinelmesh-gauge-Z07"]` and apply: the station is refused, buffers its readings, and the zone turns blind on the map.
+
+## Local Alert Node (warning a district with no cloud)
+
+Each district has a node identity (`terraform/app/edge.tf`). `edge/local_alert_node.py` runs on a laptop or small PC in the district office: it keeps the district's pre-staged bundle on disk, hears the cloud's alerts for its district over MQTT, takes field station readings over the LAN, and issues on its own when a reading crosses the danger level and the cloud is silent (after a 60 s grace) or unreachable (at once). It sends SMS through a LAN SMS gateway and serves the phone page with a local broadcast; its hash-chained decisions join the cloud decision chain when the connection returns.
+
+Demo ("cut the cloud"), all on one phone hotspot:
+
+1. Phone A runs an SMS gateway app with a local HTTP API; the laptop joins phone A's hotspot.
+2. `python edge/local_alert_node.py --thing sentinelmesh-node-kegalle --sms-url http://<phone A>:<port>/<send path>` (first run fetches the node's secret with your AWS credentials).
+3. `python edge/field_gateway.py --thing sentinelmesh-gauge-Z35 --profile surge --node http://<laptop>:8080`.
+4. Turn phone A's mobile data off: the LAN still works, the internet is gone. The node shows the cloud as unreachable and issues on the surge; SMS go out from phone A's SIM and phones on the hotspot opening `http://<laptop>:8080/phone.html` get the broadcast.
+5. Turn mobile data back on: the node uploads its decision records into the cloud chain.
+
+## Operations tools
+
+- **GameDay** (manual CI job `gameday`, or `python scripts/gameday.py`): loses cell A for real (stream consumers and IoT rules off), proves no alert gets through, fails over to standby C, times the first alert from C, and always restores. `GAMEDAY_SCOPE=cell` moves the whole cell's zones.
+- **Decision chain** (manual CI job `verify-decisions`): walks the hash chain over every decision record and fails on any edit, deletion or gap.
+- **Replay** (`python scripts/replay.py --zone Z07 --athena --since ... --until ...`, or `--file series.csv` for a historical series): re-runs the scoring rules over recorded observations and prints the tier timeline; `--set ENTER.warning=0.6` tries a rule change on real history before committing it.
 
 ## Teardown after the competition
 
 1. Run `stack=app`, `action=destroy`. The `verify-teardown` job must pass.
-2. Add a temporary admin key as `BOOTSTRAP_*` again and run `stack=bootstrap`, `action=destroy`. This removes the CI user, role, boundary and the `SM_AWS_*` variables.
+2. Add a temporary admin key as `BOOTSTRAP_*` again and run `stack=bootstrap`, `action=destroy`. This removes the CI user, the deploy role and the `SM_AWS_*` variables (the workload boundary went with the app stack).
 3. Delete the admin key, the `BOOTSTRAP_*` and `GITLAB_TOKEN` variables, and revoke the token. Optionally delete the Terraform states under **Operate → Terraform states**.

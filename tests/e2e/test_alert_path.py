@@ -9,10 +9,15 @@
 """
 
 import json
+import tempfile
 import time
+from pathlib import Path
 
+import pytest
 from boto3.dynamodb.conditions import Key
 from conftest import alerts_for, table, wait_for
+
+from edge import mqtt
 
 
 def zone_cfg(aws, zone_id):
@@ -87,6 +92,31 @@ def test_unanswered_warning_is_issued_after_timeout(aws, publish, reset_zone):
     assert alert["mode"] == "timeout"
 
 
+def test_waiting_warning_is_superseded_by_imminent(aws, publish, reset_zone):
+    # A warning waits for an officer; meanwhile the river passes the danger level and imminent is issued.
+    # When the approval window closes, the stale warning must not go out after the emergency.
+    reset_zone("T01", owner="a")  # T01's approval window is 60 s
+    since = time.time()
+    publish("T01", "gauge", level_m=gauge_level(aws, "T01", 0.8))
+    publish("T01", "forecast", fc_rain_24h_mm=90)
+    report(publish, "T01", 2)
+    wait_for(lambda: state(aws, "T01").get("tier") == "warning")
+    approvals = table(aws, "approvals")
+    pending = wait_for(lambda: [
+        a for a in approvals.query(IndexName="pending", KeyConditionExpression=Key("pending").eq("PENDING"))["Items"]
+        if a["zone_id"] == "T01"
+    ])[0]
+
+    publish("T01", "gauge", level_m=float(zone_cfg(aws, "T01")["danger_level_m"]) + 0.2)
+    wait_for(lambda: [a for a in alerts_for(aws, "T01", since) if a["tier"] == "imminent"])
+
+    settled = wait_for(lambda: (i := approvals.get_item(Key={"approval_id": pending["approval_id"]})["Item"])["status"] != "PENDING"
+                       and i, timeout=120)
+    assert settled["status"] == "SUPERSEDED"
+    time.sleep(5)
+    assert not [a for a in alerts_for(aws, "T01", since) if a["tier"] == "warning"]
+
+
 def test_bypass_issues_imminent_when_scorer_is_off(aws, publish, reset_zone, outputs):
     reset_zone("T03", owner="b")
     lam = aws["lambda"]
@@ -102,6 +132,18 @@ def test_bypass_issues_imminent_when_scorer_is_off(aws, publish, reset_zone, out
         assert alert["origin"] == "bypass"
     finally:
         lam.update_event_source_mapping(UUID=mapping, Enabled=True)
+
+
+def test_bypass_alert_in_a_test_zone_is_never_actual(aws, publish, reset_zone):
+    # The bypass input has no is_test flag; the issuer must still label a test zone's alert "Test"
+    # (this is the heartbeat's path, which used to go out as "Actual").
+    reset_zone("T03", owner="b")
+    since = time.time()
+    danger = float(zone_cfg(aws, "T03")["danger_level_m"])
+    publish("T03", "gauge", level_m=danger + 0.2, drill=False)
+    alert = wait_for(lambda: alerts_for(aws, "T03", since), timeout=90)[0]
+    assert alert["tier"] == "imminent"
+    assert alert["status"] == "Test"
 
 
 def test_silence_after_rising_marks_zone_blind(aws, publish, reset_zone):
@@ -132,3 +174,86 @@ def test_failover_is_a_data_change(aws, publish, reset_zone):
     wait_for(lambda: state(aws, "T01").get("eval_cell") == "b")
     table(aws, "zones").update_item(Key={"zone_id": "T01"}, UpdateExpression="SET owner_cell = :c",
                                     ExpressionAttributeValues={":c": "a"})
+
+
+def test_standby_cell_scores_a_zone_it_adopts(aws, publish, reset_zone):
+    reset_zone("T01", owner="c")  # what a failover of cell a does to T01; reset_zone restores it afterwards
+    since_ms = int(time.time() * 1000)
+    publish("T01", "gauge", level_m=1.0)
+    assert wait_for(lambda: aws["ddb"].Table("sentinelmesh-c-observations").query(
+        KeyConditionExpression=Key("zone_id").eq("T01") & Key("sk").gt(str(since_ms)))["Items"])
+    wait_for(lambda: state(aws, "T01").get("eval_cell") == "c")
+
+
+def test_all_clear_goes_out_only_after_an_officer_confirms(aws, publish, reset_zone, subscriber):
+    reset_zone("T02", owner="a")  # test zone: 20 s hold-down, 2 x 20 s all-clear window
+    sid = subscriber("T02")
+    since = time.time()
+    publish("T02", "gauge", level_m=gauge_level(aws, "T02", 0.8))
+    publish("T02", "forecast", fc_rain_24h_mm=90)
+    first = wait_for(lambda: [a for a in alerts_for(aws, "T02", since) if a["tier"] in ("advisory", "warning")], timeout=120)[0]
+
+    # The water goes down; after the hold-down the zone falls below advisory and an all-clear is requested.
+    publish("T02", "gauge", level_m=1.0)
+    publish("T02", "forecast", fc_rain_24h_mm=0)
+    approvals = table(aws, "approvals")
+    pending = wait_for(lambda: [
+        a for a in approvals.query(IndexName="pending", KeyConditionExpression=Key("pending").eq("PENDING"))["Items"]
+        if a["zone_id"] == "T02" and a["tier"] == "clear"
+    ], timeout=180, every=5)[0]
+    assert not [a for a in alerts_for(aws, "T02", since) if a["tier"] == "clear"], "nothing is sent before confirmation"
+
+    event = {
+        "httpMethod": "POST", "pathParameters": {"id": pending["approval_id"]},
+        "body": json.dumps({"decision": "approve", "note": "e2e all-clear"}),
+        "requestContext": {"authorizer": {"claims": {"cognito:groups": "duty_officer", "email": "e2e@test"}}},
+    }
+    aws["lambda"].invoke(FunctionName="sentinelmesh-approvals", Payload=json.dumps(event))
+
+    clear = wait_for(lambda: [a for a in alerts_for(aws, "T02", since) if a["tier"] == "clear"])[0]
+    assert clear["status"] == "Test" and clear["mode"] == "approve"
+    bucket = f"sentinelmesh-web-{aws['s'].client('sts').get_caller_identity()['Account']}"
+    cap_xml = aws["s3"].get_object(Bucket=bucket, Key=clear["cap_key"])["Body"].read().decode()
+    assert "<msgType>Update</msgType>" in cap_xml and first["alert_id"] in cap_xml
+    wait_for(lambda: [m for m in table(aws, "inbox").query(KeyConditionExpression=Key("subscriber_id").eq(sid))["Items"]
+                      if m["alert_id"] == clear["alert_id"]])
+
+
+def device_station(aws, thing="sentinelmesh-gauge-T01"):
+    """A real MQTT/TLS client for a test station, using its certificate from Secrets Manager."""
+    secret = json.loads(aws["s"].client("secretsmanager").get_secret_value(SecretId=f"sentinelmesh/devices/{thing}")["SecretString"])
+    folder = Path(tempfile.mkdtemp())
+    (folder / "c.pem").write_text(secret["certificate_pem"])
+    (folder / "k.pem").write_text(secret["private_key_pem"])
+    context = mqtt.tls_context(str(folder / "c.pem"), str(folder / "k.pem"))
+    return mqtt.Client(secret["endpoint"], thing, context).connect()
+
+
+def test_device_readings_are_attributed_by_certificate(aws, reset_zone):
+    reset_zone("T01", owner="a")
+    client = device_station(aws)
+    since_ms = int(time.time() * 1000)
+    try:
+        # The payload claims to be a drill forecast from elsewhere; the rule ignores that and uses the topic and certificate.
+        client.publish("sm/dev/T01/gauge", json.dumps({"ts": time.time(), "level_m": 1.0, "source_class": "forecast",
+                                                       "source_id": "spoofed", "drill": True}).encode())
+    finally:
+        client.close()
+    item = wait_for(lambda: aws["ddb"].Table("sentinelmesh-a-observations").query(
+        KeyConditionExpression=Key("zone_id").eq("T01") & Key("sk").gt(str(since_ms)))["Items"])[0]
+    assert item["source_class"] == "gauge" and item["source_id"] == "sentinelmesh-gauge-T01"
+    assert "drill" not in item and item["principal"]
+
+
+def test_a_device_cannot_publish_for_another_zone(aws, reset_zone):
+    reset_zone("T02", owner="a")
+    client = device_station(aws)
+    since_ms = int(time.time() * 1000)
+    try:
+        with pytest.raises((mqtt.MqttError, OSError)):  # IoT Core drops the connection on an unauthorised publish
+            client.publish("sm/dev/T02/gauge", json.dumps({"ts": time.time(), "level_m": 9.9}).encode())
+    finally:
+        client.close()
+    time.sleep(10)
+    assert not aws["ddb"].Table("sentinelmesh-a-observations").query(
+        KeyConditionExpression=Key("zone_id").eq("T02") & Key("sk").gt(str(since_ms)))["Items"]

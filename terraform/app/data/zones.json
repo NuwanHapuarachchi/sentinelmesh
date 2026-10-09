@@ -3740,6 +3740,94 @@
   "is_test": true
  },
  {
+  "zone_id": "H01",
+  "name": "Test H01",
+  "district": "Test",
+  "hazard": "flood",
+  "lat": 6.45,
+  "lon": 81.24174,
+  "polygon": [
+   [
+    81.26091,
+    6.461
+   ],
+   [
+    81.24174,
+    6.472
+   ],
+   [
+    81.22257,
+    6.461
+   ],
+   [
+    81.22257,
+    6.439
+   ],
+   [
+    81.24174,
+    6.428
+   ],
+   [
+    81.26091,
+    6.439
+   ],
+   [
+    81.26091,
+    6.461
+   ]
+  ],
+  "owner_cell": "b",
+  "warning_level_m": 3.1,
+  "danger_level_m": 4.2,
+  "gauge_cadence_s": 20,
+  "approval_timeout_s": 20,
+  "is_test": true
+ },
+ {
+  "zone_id": "H02",
+  "name": "Test H02",
+  "district": "Test",
+  "hazard": "flood",
+  "lat": 6.45,
+  "lon": 81.28009,
+  "polygon": [
+   [
+    81.29926,
+    6.461
+   ],
+   [
+    81.28009,
+    6.472
+   ],
+   [
+    81.26092,
+    6.461
+   ],
+   [
+    81.26092,
+    6.439
+   ],
+   [
+    81.28009,
+    6.428
+   ],
+   [
+    81.29926,
+    6.439
+   ],
+   [
+    81.29926,
+    6.461
+   ]
+  ],
+  "owner_cell": "c",
+  "warning_level_m": 3.5,
+  "danger_level_m": 4.9,
+  "gauge_cadence_s": 20,
+  "approval_timeout_s": 20,
+  "is_test": true
+ },
+ {
   "zone_id": "L01",
   "name": "Load 01",
   "district": "Load",

@@ -5,6 +5,19 @@ resource "random_password" "report_pepper" {
   special = false
 }
 
+# The key for hashing reporters' phone numbers. In Secrets Manager rather than a Lambda environment
+# variable, so reading the function's configuration doesn't reveal it.
+resource "aws_secretsmanager_secret" "report_pepper" {
+  name                    = "${var.prefix}/report-pepper"
+  description             = "Key for hashing citizen reporters' phone numbers (numbers are never stored in clear)"
+  recovery_window_in_days = 0
+}
+
+resource "aws_secretsmanager_secret_version" "report_pepper" {
+  secret_id     = aws_secretsmanager_secret.report_pepper.id
+  secret_string = random_password.report_pepper.result
+}
+
 data "aws_iot_endpoint" "data" {
   endpoint_type = "iot:Data-ATS"
 }
@@ -29,17 +42,19 @@ module "public_api" {
   boundary_arn = local.fn_common.boundary_arn
   role_path    = local.fn_common.role_path
 
-  environment = {
-    ZONES_TABLE       = local.t.zones
-    STATE_TABLE       = local.t.zone_state
-    SUBSCRIBERS_TABLE = local.t.subscribers
-    INBOX_TABLE       = local.t.inbox
-    ALERTS_TABLE      = local.t.alerts
-    RATELIMITS_TABLE  = local.t.ratelimits
-    IOT_ENDPOINT      = data.aws_iot_endpoint.data.endpoint_address
-    REPORT_PEPPER     = random_password.report_pepper.result
-    SMS_SECRET_ARN    = aws_secretsmanager_secret.sms.arn
-  }
+  environment = merge({
+    ZONES_TABLE              = local.t.zones
+    STATE_TABLE              = local.t.zone_state
+    SUBSCRIBERS_TABLE        = local.t.subscribers
+    INBOX_TABLE              = local.t.inbox
+    ALERTS_TABLE             = local.t.alerts
+    RATELIMITS_TABLE         = local.t.ratelimits
+    DELIVERIES_TABLE         = local.t.deliveries
+    IOT_ENDPOINT             = data.aws_iot_endpoint.data.endpoint_address
+    SMS_SECRET_ARN           = aws_secretsmanager_secret.sms.arn
+    REPORT_PEPPER_SECRET_ARN = aws_secretsmanager_secret.report_pepper.arn
+    REAL_SMS_ALLOWLIST       = join(",", var.real_sms_allowlist)
+  }, local.sms_config) # verification codes go out through the same SMS provider as alerts
 
   policy_statements = [
     { Effect = "Allow", Action = "dynamodb:GetItem", Resource = [local.a.zones, local.a.subscribers] },
@@ -47,8 +62,12 @@ module "public_api" {
     { Effect = "Allow", Action = "dynamodb:PutItem", Resource = local.a.subscribers },
     { Effect = "Allow", Action = ["dynamodb:Query", "dynamodb:UpdateItem"], Resource = local.a.inbox },
     { Effect = "Allow", Action = "dynamodb:UpdateItem", Resource = [local.a.alerts, local.a.ratelimits] },
+    { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = local.a.deliveries },
     { Effect = "Allow", Action = "iot:Publish", Resource = "arn:aws:iot:${var.region}:${var.account_id}:topic/sm/obs/*" },
-    { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = aws_secretsmanager_secret.sms.arn },
+    { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = [aws_secretsmanager_secret.sms.arn, aws_secretsmanager_secret.report_pepper.arn] },
+    { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"], Resource = local.a.ratelimits },
+    { Effect = "Allow", Action = "dynamodb:DeleteItem", Resource = local.a.subscribers },
+    { Effect = "Allow", Action = "sms-voice:SendTextMessage", Resource = "*" }, # verification codes when SMS_PROVIDER=eum
   ]
 }
 
@@ -87,13 +106,16 @@ module "console_api" {
     STATE_TABLE       = local.t.zone_state
     ALERTS_TABLE      = local.t.alerts
     SCENARIO_FUNCTION = module.scenario.name
+    PREFIX            = var.prefix
+    ACTIVE_CELLS      = join(",", local.active_cells)
+    STANDBY_CELL      = local.standby_cell
   }
 
   policy_statements = [
     { Effect = "Allow", Action = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = local.a.zones },
     { Effect = "Allow", Action = "dynamodb:Scan", Resource = local.a.zone_state },
     { Effect = "Allow", Action = "dynamodb:Query", Resource = "${local.a.alerts}/index/by-day" },
-    { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = module.scenario.arn },
+    { Effect = "Allow", Action = "lambda:InvokeFunction", Resource = concat([module.scenario.arn], [for c in module.cell : c.scorer_function_arn]) },
   ]
 }
 
@@ -121,6 +143,19 @@ resource "aws_cognito_user_pool" "officers" {
     require_symbols   = false
     require_uppercase = true
   }
+
+  # custom:district scopes an EMS user to one district (console_api filters by it).
+  schema {
+    name                     = "district"
+    attribute_data_type      = "String"
+    mutable                  = true
+    developer_only_attribute = false
+
+    string_attribute_constraints {
+      min_length = 0
+      max_length = 64
+    }
+  }
 }
 
 resource "aws_cognito_user_pool_domain" "officers" {
@@ -147,14 +182,23 @@ resource "aws_cognito_user_pool_client" "console" {
   }
 }
 
+# One group per agency role; services/console_api/handler.py decides what each may see.
+locals {
+  console_groups = ["duty_officer", "met", "ems", "ngo", "viewer"]
+  officer_roles = { for email, spec in var.officers : email => {
+    group    = split(":", spec)[0]
+    district = try(split(":", spec)[1], "")
+  } }
+}
+
 resource "aws_cognito_user_group" "groups" {
-  for_each     = toset(["duty_officer", "viewer"])
+  for_each     = toset(local.console_groups)
   name         = each.key
   user_pool_id = aws_cognito_user_pool.officers.id
 }
 
-# Team accounts from TF_VAR_officers = {"email": "duty_officer" | "viewer"}. The demo addresses are not
-# real inboxes, so no invite email is sent: Terraform sets a random password and stores the logins in
+# Team accounts from TF_VAR_officers = {"email": "group"} or {"email": "ems:District"}. The demo addresses are
+# not real inboxes, so no invite email is sent: Terraform sets a random password and stores the logins in
 # Secrets Manager, where the team reads them in the AWS console. They never appear in logs or chat.
 resource "random_password" "officer" {
   for_each         = var.officers
@@ -172,10 +216,10 @@ resource "aws_cognito_user" "officer" {
   username       = each.key
   password       = random_password.officer[each.key].result
   message_action = "SUPPRESS"
-  attributes = {
-    email          = each.key
-    email_verified = true
-  }
+  attributes = merge(
+    { email = each.key, email_verified = true },
+    local.officer_roles[each.key].district == "" ? {} : { district = local.officer_roles[each.key].district },
+  )
 }
 
 resource "aws_secretsmanager_secret" "officer_logins" {
@@ -186,16 +230,17 @@ resource "aws_secretsmanager_secret" "officer_logins" {
 
 resource "aws_secretsmanager_secret_version" "officer_logins" {
   secret_id = aws_secretsmanager_secret.officer_logins.id
-  secret_string = jsonencode({ for email, group in var.officers : email => {
+  secret_string = jsonencode({ for email, role in local.officer_roles : email => {
     password = random_password.officer[email].result
-    group    = group
+    group    = role.group
+    district = role.district
   } })
 }
 
 resource "aws_cognito_user_in_group" "officer" {
   for_each     = var.officers
   user_pool_id = aws_cognito_user_pool.officers.id
-  group_name   = aws_cognito_user_group.groups[each.value].name
+  group_name   = aws_cognito_user_group.groups[local.officer_roles[each.key].group].name
   username     = aws_cognito_user.officer[each.key].username
 }
 
@@ -212,7 +257,9 @@ locals {
   routes = {
     "/reports"               = { post = "public" }
     "/public/zones"          = { get = "public" }
-    "/phone/subscribe"       = { post = "public" }
+    "/phone/subscribe"       = { post = "public", delete = "public" }
+    "/phone/verify/start"    = { post = "public" }
+    "/phone/verify/finish"   = { post = "public" }
     "/phone/inbox"           = { get = "public" }
     "/phone/ack"             = { post = "public" }
     "/sms/dlr"               = { post = "public" }
@@ -228,7 +275,7 @@ locals {
   cors_headers = {
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
     "method.response.header.Access-Control-Allow-Headers" = "'Authorization,Content-Type,X-Device-Token'"
-    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,DELETE,OPTIONS'"
   }
 
   openapi = {
@@ -414,6 +461,40 @@ resource "aws_wafv2_web_acl" "api" {
     }
   }
 
+  # Verification codes cost an SMS each: 10 requests per 5 minutes per IP (plus 3 per number per hour in the API).
+  rule {
+    name     = "verify-rate"
+    priority = 5
+    action {
+      block {}
+    }
+    statement {
+      rate_based_statement {
+        limit                 = 10
+        evaluation_window_sec = 300
+        aggregate_key_type    = "IP"
+        scope_down_statement {
+          byte_match_statement {
+            search_string         = "/phone/verify/start"
+            positional_constraint = "ENDS_WITH"
+            field_to_match {
+              uri_path {}
+            }
+            text_transformation {
+              priority = 0
+              type     = "NONE"
+            }
+          }
+        }
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "verify-rate"
+      sampled_requests_enabled   = true
+    }
+  }
+
   rule {
     name     = "overall-rate"
     priority = 4
@@ -444,4 +525,39 @@ resource "aws_wafv2_web_acl" "api" {
 resource "aws_wafv2_web_acl_association" "api" {
   resource_arn = aws_api_gateway_stage.v1.arn
   web_acl_arn  = aws_wafv2_web_acl.api.arn
+}
+
+# WAF request logs (the name must start with aws-waf-logs-). Officer tokens, device tokens and the
+# delivery-report secret are redacted, so the logs hold no credentials. Query strings are redacted too:
+# gateways that can't send headers pass the delivery-report secret as ?k=.
+resource "aws_cloudwatch_log_group" "waf" {
+  name              = "aws-waf-logs-${var.prefix}-api"
+  retention_in_days = 14
+}
+
+resource "aws_wafv2_web_acl_logging_configuration" "api" {
+  resource_arn            = aws_wafv2_web_acl.api.arn
+  log_destination_configs = [aws_cloudwatch_log_group.waf.arn]
+
+  redacted_fields {
+    single_header {
+      name = "authorization"
+    }
+  }
+
+  redacted_fields {
+    single_header {
+      name = "x-device-token"
+    }
+  }
+
+  redacted_fields {
+    single_header {
+      name = "x-dlr-secret"
+    }
+  }
+
+  redacted_fields {
+    query_string {}
+  }
 }

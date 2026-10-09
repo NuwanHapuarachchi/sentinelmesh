@@ -22,6 +22,29 @@ variable "officer_email" {
   default     = ""
 }
 
+variable "sms_provider" {
+  description = "How real SMS go out: simulator, http (third-party gateway at sms_provider_url) or eum (AWS End User Messaging SMS). Empty = http if sms_provider_url is set, else simulator."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = contains(["", "simulator", "http", "eum"], var.sms_provider)
+    error_message = "sms_provider must be simulator, http or eum."
+  }
+}
+
+variable "eum_origination_identity" {
+  description = "For eum: sender ID, phone number or pool (name or ARN) to send from. Empty = the account default (in the SMS sandbox, only verified destination numbers receive messages)."
+  type        = string
+  default     = ""
+}
+
+variable "real_sms_allowlist" {
+  description = "If set, only these numbers may verify for real SMS (e.g. the team's phones during the competition)."
+  type        = list(string)
+  default     = []
+}
+
 variable "sms_provider_url" {
   description = "Third-party SMS gateway send URL. Empty = simulator. Set via TF_VAR_sms_provider_url."
   type        = string
@@ -40,13 +63,24 @@ variable "rules_version" {
   default     = "dev"
 }
 
+variable "revoked_devices" {
+  description = "Field device things whose certificates are deactivated (revocation demo), e.g. [\"sentinelmesh-gauge-Z07\"]."
+  type        = list(string)
+  default     = []
+}
+
 variable "officers" {
-  description = "Console users: email => group (duty_officer or viewer). Set via TF_VAR_officers in GitLab."
+  description = "Console users: email => group, or \"ems:District\" for an EMS user scoped to one district. Groups: duty_officer, met, ems, ngo, viewer. Set via TF_VAR_officers in GitLab."
   type        = map(string)
   default     = {}
 
   validation {
-    condition     = alltrue([for g in values(var.officers) : contains(["duty_officer", "viewer"], g)])
-    error_message = "Each officer's group must be duty_officer or viewer."
+    condition     = alltrue([for spec in values(var.officers) : contains(["duty_officer", "met", "ems", "ngo", "viewer"], split(":", spec)[0])])
+    error_message = "Each officer is \"group\" or \"ems:District\", with group one of duty_officer, met, ems, ngo, viewer."
+  }
+
+  validation {
+    condition     = alltrue([for spec in values(var.officers) : !startswith(spec, "ems") || can(regex("^ems:[^:]+$", spec))])
+    error_message = "An ems officer needs a district, e.g. \"ems:Ratnapura\"."
   }
 }

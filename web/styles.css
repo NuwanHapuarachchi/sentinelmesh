@@ -14,6 +14,7 @@
   --warning: #d14b3d;
   --imminent: #7d1220;
   --blind: #6b5ca5;
+  --clear: #2e7d4f;
   --display: "Barlow Condensed", "Arial Narrow", sans-serif;
   --body: "Source Sans 3", "Segoe UI", sans-serif;
 }
@@ -88,6 +89,7 @@ nav button:hover { background: var(--paper); color: var(--ink); }
 .tier-normal { background: var(--normal); } .tier-watch { background: var(--watch); }
 .tier-advisory { background: var(--advisory); } .tier-warning { background: var(--warning); }
 .tier-imminent { background: var(--imminent); }
+.tier-clear { background: var(--clear); }
 .tier-blind { background: repeating-linear-gradient(45deg, var(--blind) 0 6px, #8f84c2 6px 12px); }
 
 @media (prefers-reduced-motion: no-preference) {
