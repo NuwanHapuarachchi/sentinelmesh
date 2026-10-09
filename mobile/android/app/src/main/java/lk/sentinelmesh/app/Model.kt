@@ -20,8 +20,11 @@ data class Zone(
     }
 
     fun contains(p: LatLon): Boolean {
-        // Ray casting on the outer ring (zones are simple polygons).
-        val ring = rings.first()
+        // Each ring is an outer polygon, including separate parts of a MultiPolygon zone.
+        return rings.any { containsRing(it, p) }
+    }
+
+    private fun containsRing(ring: List<LatLon>, p: LatLon): Boolean {
         var inside = false
         var j = ring.size - 1
         for (i in ring.indices) {

@@ -13,7 +13,12 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -27,6 +32,7 @@ import kotlin.random.Random
  * outage, phones don't all reconnect in the same second.
  */
 class ListenerService : Service() {
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loop: Job? = null
     private var watcher: Job? = null
     @Volatile private var current: MqttListener? = null
@@ -43,14 +49,17 @@ class ListenerService : Service() {
         val type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         ServiceCompat.startForeground(this, Alarm.LISTENER_ID, Alarm.listenerNotification(this, Sentinel.link.value), type)
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(netCallback)
-        loop = Sentinel.scope.launch { run() }
-        watcher = Sentinel.scope.launch {
+        loop = serviceScope.launch { run() }
+        watcher = serviceScope.launch {
             Sentinel.link.collect { Alarm.updateListener(this@ListenerService, it) }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_RESTART) current?.close()
+        if (intent?.action == ACTION_RESTART) {
+            current?.close()
+            wake.complete(Unit)
+        }
         return START_STICKY
     }
 
@@ -58,18 +67,27 @@ class ListenerService : Service() {
         runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(netCallback) }
         loop?.cancel()
         watcher?.cancel()
+        serviceScope.cancel()
         current?.close()
         super.onDestroy()
     }
 
     private suspend fun run() {
         var failures = 0
-        while (Sentinel.scope.isActive) {
+        while (serviceScope.isActive) {
             val zone = Sentinel.myZoneId.value
             if (zone == null) { delay(5_000); continue }
             Sentinel.link.value = Link.CONNECTING
             val closed = CompletableDeferred<String>()
-            val ok = runCatching { connect(zone, closed) }.onFailure { Log.w(TAG, "connect failed", it) }.isSuccess
+            val ok = try {
+                connect(zone, closed)
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "connect failed", e)
+                false
+            }
             if (ok) {
                 val reason = closed.await()
                 Log.i(TAG, "connection ended: $reason")
@@ -77,6 +95,8 @@ class ListenerService : Service() {
             }
             failures++
             Sentinel.link.value = Link.OFFLINE
+            // A zone change should subscribe to the new area without waiting for outage back-off.
+            if (zone != Sentinel.myZoneId.value) continue
             // Exponential back-off with full jitter, capped at 2 minutes; a new network wakes it early.
             val capMs = minOf(120_000L, 2_000L shl minOf(failures, 6))
             wake = CompletableDeferred()
@@ -105,7 +125,7 @@ class ListenerService : Service() {
             keepAliveS = KEEP_ALIVE_S,
             onReady = {
                 Sentinel.link.value = Link.LISTENING
-                Sentinel.scope.launch { Sentinel.catchUp() }
+                serviceScope.launch { Sentinel.catchUp() }
             },
             onMessage = { _, payload ->
                 runCatching { Sentinel.receive(AlertMsg.parse(JSONObject(String(payload, Charsets.UTF_8)), "push")) }
@@ -116,7 +136,7 @@ class ListenerService : Service() {
         current = listener
         listener.open()
         // Keep-alive pings (free on AWS), and reconnect with fresh credentials before they expire.
-        Sentinel.scope.launch {
+        serviceScope.launch {
             while (!closed.isCompleted) {
                 delay(PING_EVERY_MS)
                 if (closed.isCompleted) break
