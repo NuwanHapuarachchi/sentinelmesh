@@ -30,7 +30,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -349,9 +351,9 @@ private fun SettingsTab(s: Strings, lang: Lang, resumeTick: Int) {
         }
         Card(Modifier.fillMaxWidth()) {
             SectionLabel(s.stayProtected)
-            PermissionRow(Icons.Filled.Notifications, s.permNotifications, s.permNotificationsHint, notificationsAllowed(ctx), s) { openAppNotificationSettings(ctx) }
-            PermissionRow(Icons.Filled.Notifications, s.permFullScreen, s.permFullScreenHint, fullScreenAllowed(ctx), s) { openFullScreenSettings(ctx) }
-            PermissionRow(Icons.Filled.Notifications, s.permBackground, s.permBackgroundHint, backgroundAllowed(ctx), s) { openBatterySettings(ctx) }
+            PermissionRow(Icons.Filled.Notifications, s.permNotifications, s.permNotificationsHint, notificationsAllowed(ctx), s, inCard = true) { openAppNotificationSettings(ctx) }
+            PermissionRow(Icons.Filled.Warning, s.permFullScreen, s.permFullScreenHint, fullScreenAllowed(ctx), s, inCard = true) { openFullScreenSettings(ctx) }
+            PermissionRow(Icons.Filled.Refresh, s.permBackground, s.permBackgroundHint, backgroundAllowed(ctx), s, inCard = true) { openBatterySettings(ctx) }
         }
         Card(Modifier.fillMaxWidth()) {
             Text(s.testAlarm, style = MaterialTheme.typography.titleMedium)

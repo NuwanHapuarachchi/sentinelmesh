@@ -169,9 +169,13 @@ private fun PermissionsStep(resumeTick: Int) {
 }
 
 @Composable
-fun PermissionRow(icon: ImageVector, title: String, hint: String, granted: Boolean, s: lk.sentinelmesh.app.Strings, onAllow: () -> Unit) {
+fun PermissionRow(
+    icon: ImageVector, title: String, hint: String, granted: Boolean, s: lk.sentinelmesh.app.Strings,
+    inCard: Boolean = false, onAllow: () -> Unit,
+) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 5.dp).clip(RoundedCornerShape(18.dp)).background(C.paper).padding(14.dp),
+        if (inCard) Modifier.fillMaxWidth().padding(vertical = 8.dp)
+        else Modifier.fillMaxWidth().padding(vertical = 5.dp).clip(RoundedCornerShape(18.dp)).background(C.paper).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(42.dp).clip(CircleShape).background(if (granted) Color(0xFFDFF1E6) else Color(0xFFE3EDF2)), contentAlignment = Alignment.Center) {
