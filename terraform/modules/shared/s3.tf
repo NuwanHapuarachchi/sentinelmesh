@@ -40,42 +40,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "this" {
   }
 }
 
-# Storage limitation: raw observations are kept 90 days for post-event replay, Athena results a week.
-# Decision records and CAP files have no expiry: they are the audit trail.
-resource "aws_s3_bucket_lifecycle_configuration" "evidence" {
-  bucket = aws_s3_bucket.this["evidence"].id
-
-  rule {
-    id     = "observations-90-days"
-    status = "Enabled"
-    filter {
-      prefix = "obs/"
-    }
-    expiration {
-      days = 90
-    }
-  }
-
-  rule {
-    id     = "athena-results-7-days"
-    status = "Enabled"
-    filter {
-      prefix = "athena-results/"
-    }
-    expiration {
-      days = 7
-    }
-  }
-
-  rule {
-    id     = "abort-incomplete-uploads"
-    status = "Enabled"
-    filter {}
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
-  }
-}
+# No lifecycle expiry: nothing has a retention date; terraform destroy removes it all.
 
 resource "aws_s3_bucket_versioning" "decisions" {
   bucket = aws_s3_bucket.this["decisions"].id
