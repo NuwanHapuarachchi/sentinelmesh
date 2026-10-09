@@ -51,6 +51,12 @@ object Sentinel {
         }.getOrDefault(emptyList())
         prefs.getString("zones_cache", null)?.let { runCatching { zones.value = Geo.parseZones(it) } }
         prefs.getString("config_cache", null)?.let { runCatching { _config.value = AppConfig.parse(it) } }
+        prefs.getString("states_cache", null)?.let {
+            runCatching {
+                states.value = Geo.parseStates(it)
+                statesAt.value = prefs.getLong("states_at", 0L)
+            }
+        }
         scope.launch { refreshLoop() }
     }
 
@@ -80,7 +86,7 @@ object Sentinel {
         while (scope.isActive) {
             runCatching {
                 if (_config.value == null || zones.value.isEmpty()) loadStatic()
-                Net.getText("public/zones.json")?.let { states.value = Geo.parseStates(it); statesAt.value = System.currentTimeMillis() }
+                loadStates()
             }
             delay(if (appVisible) 30_000 else 300_000)
         }
@@ -93,7 +99,15 @@ object Sentinel {
     }
 
     fun refreshNow() = scope.launch {
-        runCatching { Net.getText("public/zones.json")?.let { states.value = Geo.parseStates(it); statesAt.value = System.currentTimeMillis() } }
+        runCatching { loadStates() }
+    }
+
+    private fun loadStates() {
+        Net.getText("public/zones.json")?.let {
+            states.value = Geo.parseStates(it)
+            statesAt.value = System.currentTimeMillis()
+            prefs.edit().putString("states_cache", it).putLong("states_at", statesAt.value).apply()
+        }
     }
 
     /** After (re)connecting, read the zone's last broadcast so nothing sent while offline is missed. */
@@ -108,9 +122,8 @@ object Sentinel {
     }
 
     /** A broadcast arrived: keep it, and alarm if it is for this phone's area and not seen before. */
-    fun receive(msg: AlertMsg) {
-        if (msg.status == "Test") return
-        if (msg.zoneId != myZoneId.value && msg.channel != "test") return
+    @Synchronized fun receive(msg: AlertMsg) {
+        if (!AlertPolicy.accepts(msg, myZoneId.value)) return
         val key = msg.alertId
         synchronized(shown) {
             if (!shown.add(key)) return

@@ -74,6 +74,7 @@ data class Strings(
     val guidance: Map<String, List<String>>,
     val blind: String,
     val blindHint: String,
+    val statusUnavailable: String,
 )
 
 private val TIER_EN = mapOf(
@@ -152,6 +153,7 @@ private val EN = Strings(
     ),
     blind = "Sensors silent",
     blindHint = "We can't see this area right now. Treat it with care.",
+    statusUnavailable = "Status unavailable. Connect to refresh; follow official warnings.",
 )
 
 private val SI = Strings(
@@ -228,6 +230,7 @@ private val SI = Strings(
     ),
     blind = "සංවේදක නිහඬයි",
     blindHint = "දැන් මෙම ප්‍රදේශය නිරීක්ෂණය කළ නොහැක. පරිස්සම් වන්න.",
+    statusUnavailable = "තත්ත්වය ලබාගත නොහැක. යාවත්කාලීන කිරීමට සම්බන්ධ වන්න; නිල අනතුරු ඇඟවීම් අනුගමනය කරන්න.",
 )
 
 private val TA = Strings(
@@ -304,6 +307,7 @@ private val TA = Strings(
     ),
     blind = "உணரிகள் அமைதி",
     blindHint = "இப்போது இந்தப் பகுதியைக் கண்காணிக்க முடியவில்லை. கவனமாக இருங்கள்.",
+    statusUnavailable = "நிலை கிடைக்கவில்லை. புதுப்பிக்க இணையத்தில் இணையுங்கள்; அதிகாரப்பூர்வ எச்சரிக்கைகளைப் பின்பற்றுங்கள்.",
 )
 
 fun strings(lang: Lang) = when (lang) {

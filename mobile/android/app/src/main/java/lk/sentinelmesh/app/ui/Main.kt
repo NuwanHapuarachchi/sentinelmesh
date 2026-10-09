@@ -129,7 +129,7 @@ private fun HomeTab(s: Strings, lang: Lang, openMap: () -> Unit) {
     val history by Sentinel.history.collectAsState()
     val zone = zones.firstOrNull { it.id == myId }
     val st = states[myId]
-    val tier = st?.tier ?: "normal"
+    val tier = st?.tier ?: "unknown"
     val blind = st?.blind == true
     val latest = history.firstOrNull { it.zoneId == myId || it.channel == "test" }
 
@@ -152,7 +152,7 @@ private fun HomeTab(s: Strings, lang: Lang, openMap: () -> Unit) {
             Column {
                 Text(s.nowIn.uppercase(), style = MaterialTheme.typography.labelMedium, color = fg.copy(alpha = 0.8f))
                 Spacer(Modifier.height(6.dp))
-                Text(if (blind) s.blind else (s.tier[tier] ?: tier), style = MaterialTheme.typography.displaySmall, color = fg)
+                Text(if (st == null) s.statusUnavailable else if (blind) s.blind else (s.tier[tier] ?: tier), style = MaterialTheme.typography.displaySmall, color = fg)
                 Spacer(Modifier.height(4.dp))
                 Text(zone?.name ?: "—", style = MaterialTheme.typography.titleLarge, color = fg)
                 Text(listOfNotNull(zone?.district, zone?.let { s.hazardOf(it.hazard) }).joinToString(" · "), style = MaterialTheme.typography.bodyLarge, color = fg.copy(alpha = 0.85f))
@@ -174,7 +174,7 @@ private fun HomeTab(s: Strings, lang: Lang, openMap: () -> Unit) {
         Card(Modifier.fillMaxWidth()) {
             SectionLabel(s.whatToDo)
             Spacer(Modifier.height(10.dp))
-            (s.guidance[tier] ?: s.guidance.getValue("normal")).forEachIndexed { i, line ->
+            (s.guidance[tier] ?: listOf(s.statusUnavailable)).forEachIndexed { i, line ->
                 Row(Modifier.padding(vertical = 5.dp), verticalAlignment = Alignment.Top) {
                     Box(Modifier.size(26.dp).clip(CircleShape).background(tierColor(tier).copy(alpha = 0.22f)), contentAlignment = Alignment.Center) {
                         Text("${i + 1}", style = MaterialTheme.typography.labelLarge, color = C.ink)
@@ -198,11 +198,11 @@ private fun HomeTab(s: Strings, lang: Lang, openMap: () -> Unit) {
         Spacer(Modifier.height(14.dp))
         // District overview with a small live map.
         val district = zones.filter { it.district == zone?.district }
-        val atRisk = district.count { (states[it.id]?.tier ?: "normal") != "normal" }
+        val atRisk = district.count { states[it.id]?.tier?.let { it != "normal" && it != "clear" } == true }
         Card(Modifier.fillMaxWidth().clickable { openMap() }, padding = 0.dp) {
             Column(Modifier.padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 10.dp)) {
                 SectionLabel("${s.district} · ${zone?.district ?: ""}")
-                Text(if (atRisk == 0) s.allAreasNormal else "$atRisk ${s.areasAtRisk}", style = MaterialTheme.typography.titleLarge)
+                Text(if (district.any { states[it.id] == null }) s.statusUnavailable else if (atRisk == 0) s.allAreasNormal else "$atRisk ${s.areasAtRisk}", style = MaterialTheme.typography.titleLarge)
             }
             if (district.isNotEmpty()) {
                 ZoneMap(
