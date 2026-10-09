@@ -93,10 +93,15 @@ class MqttListener(
         when (header shr 4) {
             2 -> { // CONNACK
                 val rc = body.getOrElse(1) { 0 }.toInt()
+                android.util.Log.i("SentinelMqtt", "CONNACK rc=$rc session=${body.getOrElse(0) { 0 }}")
                 if (rc != 0) { ws?.close(1000, "refused"); finish("connection refused ($rc)"); return }
                 ws?.send(subscribePacket().toByteString())
             }
-            9 -> onReady() // SUBACK
+            9 -> { // SUBACK: one return code per topic; 0x80 means IoT Core refused it
+                val codes = body.drop(2).map { it.toInt() and 0xFF }
+                android.util.Log.i("SentinelMqtt", "SUBACK $codes")
+                if (codes.any { it == 0x80 }) { ws?.close(1000, "subscribe refused"); finish("subscribe refused") } else onReady()
+            }
             3 -> { // PUBLISH
                 val qos = (header shr 1) and 3
                 val topicLen = ((body[0].toInt() and 0xFF) shl 8) or (body[1].toInt() and 0xFF)
@@ -107,6 +112,7 @@ class MqttListener(
                     p += 2
                     ws?.send(byteArrayOf(0x40, 2, id0, id1).toByteString()) // PUBACK
                 }
+                android.util.Log.i("SentinelMqtt", "PUBLISH $topic (${body.size - p} bytes)")
                 onMessage(topic, body.copyOfRange(p, body.size))
             }
             13 -> Unit // PINGRESP
