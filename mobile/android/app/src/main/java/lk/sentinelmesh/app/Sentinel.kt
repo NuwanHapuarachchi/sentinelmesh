@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +32,8 @@ object Sentinel {
     val statesAt = MutableStateFlow(0L)
     val history = MutableStateFlow<List<AlertMsg>>(emptyList())
     val link = MutableStateFlow(Link.CONNECTING)
+    val refreshing = MutableStateFlow(false)
+    val refreshFailed = MutableStateFlow(false)
     private val _config = MutableStateFlow<AppConfig?>(null)
     val config: StateFlow<AppConfig?> = _config
 
@@ -51,8 +55,16 @@ object Sentinel {
         }.getOrDefault(emptyList())
         prefs.getString("zones_cache", null)?.let { runCatching { zones.value = Geo.parseZones(it) } }
         prefs.getString("config_cache", null)?.let { runCatching { _config.value = AppConfig.parse(it) } }
-        scope.launch { refreshLoop() }
+        prefs.getString("states_cache", null)?.let {
+            runCatching {
+                states.value = Geo.parseStates(it)
+                statesAt.value = prefs.getLong("states_at", 0L)
+            }
+        }
     }
+
+    /** Start network monitoring after local state and notification channels are ready. */
+    fun startMonitoring() = scope.launch { refreshLoop() }
 
     fun setLang(l: Lang) { lang.value = l; prefs.edit().putString("lang", l.code).apply() }
 
@@ -80,7 +92,7 @@ object Sentinel {
         while (scope.isActive) {
             runCatching {
                 if (_config.value == null || zones.value.isEmpty()) loadStatic()
-                Net.getText("public/zones.json")?.let { states.value = Geo.parseStates(it); statesAt.value = System.currentTimeMillis() }
+                loadStates()
             }
             delay(if (appVisible) 30_000 else 300_000)
         }
@@ -92,8 +104,31 @@ object Sentinel {
         return _config.value
     }
 
-    fun refreshNow() = scope.launch {
-        runCatching { Net.getText("public/zones.json")?.let { states.value = Geo.parseStates(it); statesAt.value = System.currentTimeMillis() } }
+    fun refreshNow() = scope.launch { refresh() }
+
+    suspend fun refresh() = withContext(Dispatchers.IO) {
+        if (!refreshing.compareAndSet(false, true)) return@withContext
+        refreshFailed.value = false
+        try {
+            if (zones.value.isEmpty()) loadStatic()
+            check(loadStates()) { "Zone status is not available" }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            refreshFailed.value = true
+        } finally {
+            refreshing.value = false
+        }
+    }
+
+    private fun loadStates(): Boolean {
+        val json = Net.getText("public/zones.json") ?: return false
+        json.let {
+            states.value = Geo.parseStates(it)
+            statesAt.value = System.currentTimeMillis()
+            prefs.edit().putString("states_cache", it).putLong("states_at", statesAt.value).apply()
+        }
+        return true
     }
 
     /** After (re)connecting, read the zone's last broadcast so nothing sent while offline is missed. */
@@ -108,9 +143,8 @@ object Sentinel {
     }
 
     /** A broadcast arrived: keep it, and alarm if it is for this phone's area and not seen before. */
-    fun receive(msg: AlertMsg) {
-        if (msg.status == "Test") return
-        if (msg.zoneId != myZoneId.value && msg.channel != "test") return
+    @Synchronized fun receive(msg: AlertMsg) {
+        if (!AlertPolicy.accepts(msg, myZoneId.value)) return
         val key = msg.alertId
         synchronized(shown) {
             if (!shown.add(key)) return

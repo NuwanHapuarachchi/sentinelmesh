@@ -7,6 +7,7 @@ class SentinelApp : Application() {
         super.onCreate()
         Alarm.createChannels(this)
         Sentinel.init(this)
+        Sentinel.startMonitoring()
         runCatching { ListenerService.start(this) }
     }
 }

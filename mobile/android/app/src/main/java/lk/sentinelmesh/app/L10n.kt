@@ -74,6 +74,15 @@ data class Strings(
     val guidance: Map<String, List<String>>,
     val blind: String,
     val blindHint: String,
+    val statusUnavailable: String,
+    val refresh: String,
+    val refreshError: String,
+    val allAlerts: String,
+    val urgentAlerts: String,
+    val noMatchingAlerts: String,
+    val noAreas: String,
+    val unknown: String,
+    val cachedStatus: String,
 )
 
 private val TIER_EN = mapOf(
@@ -152,6 +161,11 @@ private val EN = Strings(
     ),
     blind = "Sensors silent",
     blindHint = "We can't see this area right now. Treat it with care.",
+    statusUnavailable = "Status unavailable. Connect to refresh; follow official warnings.",
+    refresh = "Refresh", refreshError = "Couldn't refresh. Saved information is still available.",
+    allAlerts = "All alerts", urgentAlerts = "Urgent", noMatchingAlerts = "No alerts match this filter.",
+    noAreas = "No areas found. Try a different name or district.", unknown = "Unknown",
+    cachedStatus = "Last downloaded status",
 )
 
 private val SI = Strings(
@@ -228,6 +242,11 @@ private val SI = Strings(
     ),
     blind = "සංවේදක නිහඬයි",
     blindHint = "දැන් මෙම ප්‍රදේශය නිරීක්ෂණය කළ නොහැක. පරිස්සම් වන්න.",
+    statusUnavailable = "තත්ත්වය ලබාගත නොහැක. යාවත්කාලීන කිරීමට සම්බන්ධ වන්න; නිල අනතුරු ඇඟවීම් අනුගමනය කරන්න.",
+    refresh = "යාවත්කාලීන කරන්න", refreshError = "යාවත්කාලීන කළ නොහැක. සුරැකි තොරතුරු තවමත් ලබාගත හැක.",
+    allAlerts = "සියලු ඇඟවීම්", urgentAlerts = "හදිසි", noMatchingAlerts = "මෙම පෙරහනට ගැළපෙන ඇඟවීම් නැත.",
+    noAreas = "ප්‍රදේශ හමු නොවීය. වෙනත් නමක් හෝ දිස්ත්‍රික්කයක් උත්සාහ කරන්න.", unknown = "නොදනී",
+    cachedStatus = "අවසන් වරට ලබාගත් තත්ත්වය",
 )
 
 private val TA = Strings(
@@ -304,6 +323,11 @@ private val TA = Strings(
     ),
     blind = "உணரிகள் அமைதி",
     blindHint = "இப்போது இந்தப் பகுதியைக் கண்காணிக்க முடியவில்லை. கவனமாக இருங்கள்.",
+    statusUnavailable = "நிலை கிடைக்கவில்லை. புதுப்பிக்க இணையத்தில் இணையுங்கள்; அதிகாரப்பூர்வ எச்சரிக்கைகளைப் பின்பற்றுங்கள்.",
+    refresh = "புதுப்பிக்கவும்", refreshError = "புதுப்பிக்க முடியவில்லை. சேமித்த தகவல்கள் இன்னும் கிடைக்கின்றன.",
+    allAlerts = "அனைத்து எச்சரிக்கைகள்", urgentAlerts = "அவசரம்", noMatchingAlerts = "இந்த வடிகட்டிக்கு பொருந்தும் எச்சரிக்கைகள் இல்லை.",
+    noAreas = "பகுதிகள் இல்லை. வேறு பெயர் அல்லது மாவட்டத்தை முயற்சிக்கவும்.", unknown = "தெரியவில்லை",
+    cachedStatus = "கடைசியாகப் பதிவிறக்கிய நிலை",
 )
 
 fun strings(lang: Lang) = when (lang) {

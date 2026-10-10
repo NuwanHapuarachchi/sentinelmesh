@@ -103,7 +103,7 @@ fun ZoneMap(
     // Fit the focus zones whenever they (or the view size) change.
     LaunchedEffect(focusKey, size) {
         if (size.width == 0 || focus.isEmpty()) return@LaunchedEffect
-        val pts = focus.flatMap { it.rings.first() }
+        val pts = focus.flatMap { it.rings.flatten() }
         val minX = pts.minOf { wx(it.lon) }; val maxX = pts.maxOf { wx(it.lon) }
         val minY = pts.minOf { wy(it.lat) }; val maxY = pts.maxOf { wy(it.lat) }
         cx = ((minX + maxX) / 2).toFloat(); cy = ((minY + maxY) / 2).toFloat()

@@ -20,8 +20,11 @@ data class Zone(
     }
 
     fun contains(p: LatLon): Boolean {
-        // Ray casting on the outer ring (zones are simple polygons).
-        val ring = rings.first()
+        // Each ring is an outer polygon, including separate parts of a MultiPolygon zone.
+        return rings.any { containsRing(it, p) }
+    }
+
+    private fun containsRing(ring: List<LatLon>, p: LatLon): Boolean {
         var inside = false
         var j = ring.size - 1
         for (i in ring.indices) {
@@ -47,6 +50,7 @@ data class AlertMsg(
     val texts: Map<String, String>,
     val receivedAt: Long,
     val channel: String, // push | catchup | test
+    val broadcastAt: Long? = null, // Unix seconds; retained for queued MQTT messages too
 ) {
     fun text(lang: Lang) = texts[lang.code] ?: texts["en"] ?: ""
     val urgent get() = tier == "imminent" || tier == "warning"
@@ -54,6 +58,7 @@ data class AlertMsg(
     fun toJson(): JSONObject = JSONObject()
         .put("alert_id", alertId).put("zone_id", zoneId).put("tier", tier).put("hazard", hazard)
         .put("status", status).put("texts", JSONObject(texts)).put("received_at", receivedAt).put("channel", channel)
+        .put("broadcast_at", broadcastAt)
 
     companion object {
         /** From a broadcast message (sm/broadcast/{zone} or cb/{zone}.json) or our own saved copy. */
@@ -68,8 +73,21 @@ data class AlertMsg(
                 texts = t.keys().asSequence().associateWith { t.getString(it) },
                 receivedAt = o.optLong("received_at", now),
                 channel = channel ?: o.optString("channel", "push"),
+                broadcastAt = if (o.isNull("broadcast_at")) null else o.optLong("broadcast_at"),
             )
         }
+    }
+}
+
+/** Apply the same safety checks to live push and offline catch-up before recording or alarming. */
+object AlertPolicy {
+    fun accepts(msg: AlertMsg, zoneId: String?, nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (msg.channel == "test") return msg.status == "Exercise"
+        if (msg.zoneId != zoneId || msg.alertId.isBlank()) return false
+        if (msg.status !in setOf("Actual", "Exercise")) return false
+        if (msg.tier !in setOf("watch", "advisory", "warning", "imminent", "clear")) return false
+        val issued = msg.broadcastAt ?: return false
+        return nowMs / 1000 - issued in 0..6 * 3600
     }
 }
 

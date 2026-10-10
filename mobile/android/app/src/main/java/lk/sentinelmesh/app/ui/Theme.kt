@@ -1,6 +1,7 @@
 package lk.sentinelmesh.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -12,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -19,9 +21,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import lk.sentinelmesh.app.R
 
 // Same palette as the officers' console, so the whole system looks like one service.
 object C {
@@ -56,15 +61,20 @@ fun onTier(tier: String?, blind: Boolean = false): Color =
 
 val TIER_ORDER = listOf("normal", "watch", "advisory", "warning", "imminent")
 
+private val displayFont = FontFamily(Font(R.font.barlow_condensed_semibold, FontWeight.SemiBold))
+private val bodyFont = FontFamily(
+    Font(R.font.source_sans, FontWeight.Normal),
+    Font(R.font.source_sans_semibold, FontWeight.SemiBold),
+)
 private val type = Typography(
-    displaySmall = TextStyle(fontSize = 34.sp, fontWeight = FontWeight.Black, lineHeight = 40.sp, letterSpacing = (-0.5).sp),
-    headlineSmall = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.Bold, lineHeight = 30.sp),
-    titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold, lineHeight = 26.sp),
-    titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp),
-    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
-    bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
-    labelLarge = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.2.sp),
-    labelMedium = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
+    displaySmall = TextStyle(fontFamily = displayFont, fontSize = 34.sp, fontWeight = FontWeight.SemiBold, lineHeight = 38.sp),
+    headlineSmall = TextStyle(fontFamily = displayFont, fontSize = 26.sp, fontWeight = FontWeight.SemiBold, lineHeight = 32.sp),
+    titleLarge = TextStyle(fontFamily = displayFont, fontSize = 23.sp, fontWeight = FontWeight.SemiBold, lineHeight = 28.sp),
+    titleMedium = TextStyle(fontFamily = bodyFont, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, lineHeight = 23.sp),
+    bodyLarge = TextStyle(fontFamily = bodyFont, fontSize = 17.sp, lineHeight = 25.sp),
+    bodyMedium = TextStyle(fontFamily = bodyFont, fontSize = 15.sp, lineHeight = 22.sp),
+    labelLarge = TextStyle(fontFamily = bodyFont, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+    labelMedium = TextStyle(fontFamily = bodyFont, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp),
 )
 
 @Composable
@@ -76,13 +86,14 @@ fun SentinelTheme(content: @Composable () -> Unit) {
             secondaryContainer = Color(0xFFD6E6EE), onSecondaryContainer = C.ink,
         ),
         typography = type,
+        shapes = Shapes(small = RoundedCornerShape(6.dp), medium = RoundedCornerShape(12.dp), large = RoundedCornerShape(16.dp)),
         content = content,
     )
 }
 
 @Composable
 fun Card(modifier: Modifier = Modifier, padding: Dp = 18.dp, content: @Composable ColumnScope.() -> Unit) {
-    Surface(modifier = modifier, shape = RoundedCornerShape(22.dp), color = C.paper, shadowElevation = 1.dp) {
+    Surface(modifier = modifier, shape = RoundedCornerShape(12.dp), color = C.paper, border = BorderStroke(1.dp, C.rule)) {
         Column(Modifier.padding(padding), content = content)
     }
 }
