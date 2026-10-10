@@ -23,3 +23,7 @@ terraform/app/build/
 
 # Edge programs' local state: buffered readings, fetched device certificates and keys
 edge/state/
+
+# Python local test/runtime bytecode
+__pycache__/
+*.pyc

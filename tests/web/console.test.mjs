@@ -16,7 +16,7 @@ function element() {
   return { textContent: "", innerHTML: "", hidden: false, value: "", onclick: null, dataset: {} };
 }
 
-function browser({ groups = [], district, api = {} }) {
+function browser({ groups = [], district, api = {}, geminiEnabled = false }) {
   const els = new Proxy({}, { get: (t, id) => (t[id] ??= element()) });
   const officerSections = [element(), element()];
   const layers = {};
@@ -24,7 +24,7 @@ function browser({ groups = [], district, api = {} }) {
   const json = (body) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
   const fetch = (url) => {
     calls.push(url);
-    if (url === "config.json") return json({ api_url: "https://api.test/v1" });
+    if (url === "config.json") return json({ api_url: "https://api.test/v1", gemini_enabled: geminiEnabled });
     if (url === "zones.geojson") return json(GEO);
     if (url === "public/zones.json") return json({ zones: [{ zone_id: "Z07", tier: "warning", blind: false }] });
     const path = url.replace("https://api.test/v1", "");
@@ -48,7 +48,7 @@ function browser({ groups = [], district, api = {} }) {
     fetch, L, Auth, setInterval: () => 0, prompt: () => null, Date, JSON, Number, String, Object, Math, Promise, console,
   });
   vm.runInContext(SOURCE, context);
-  return { els, layers, calls, officerSections };
+  return { els, layers, calls, officerSections, context };
 }
 
 async function settled(b) {
@@ -95,4 +95,17 @@ test("the public gets the cached public file and no API calls", async () => {
   const b = await settled(browser({}));
   assert.deepEqual(b.calls.filter((u) => u.startsWith("https://api.test")), []);
   assert.equal(b.layers.Z07.style.fillColor, "#d14b3d"); // warning colour from public/zones.json
+});
+
+test("AI evidence is escaped and expires when the zone snapshot changes", async () => {
+  const result = { captured_at: 1791400000, model: "gemini-test", evidence: {},
+    insights: [{ text: "<img src=x>", evidence: ["assessment"] }], anomalies: [], outlook: [] };
+  const b = await settled(browser({ groups: ["met"], geminiEnabled: true,
+    api: { "/zones": ZONES, "/alerts": ALERTS, "/zones/Z35/briefing": result } }));
+  vm.runInContext("selectZone('Z35')", b.context);
+  await vm.runInContext("analyzeZone()", b.context);
+  assert.match(b.els.zonedetail.innerHTML, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(b.els.zonedetail.innerHTML, /<img src=x>/);
+  vm.runInContext("zones.Z35.updated_at = 42; selectZone('Z35')", b.context);
+  assert.doesNotMatch(b.els.zonedetail.innerHTML, /&lt;img src=x&gt;/);
 });
