@@ -19,6 +19,7 @@ POST /cells/{cell}/restore      return {cell}'s zones to it (duty_officer)
 Environment: ZONES_TABLE, STATE_TABLE, ALERTS_TABLE, SCENARIO_FUNCTION, PREFIX, ACTIVE_CELLS ("a,b"), STANDBY_CELL ("c").
 """
 
+import hashlib
 import json
 import os
 import time
@@ -26,7 +27,9 @@ from datetime import UTC, datetime, timedelta
 
 import boto3
 from boto3.dynamodb.conditions import Key
+from botocore.exceptions import ClientError
 
+from common import briefing
 from common.api import claims_of, groups_of, respond
 from common.observe import log
 
@@ -74,6 +77,10 @@ def handler(event, context):
         return list_zones(role, district)
     if (method, resource) == ("GET", "/alerts"):
         return list_alerts(role, district)
+    if (method, resource) == ("POST", "/zones/{id}/briefing"):
+        if role not in ("duty_officer", "met"):
+            return respond(403, {"error": "sensor evidence access required"})
+        return zone_briefing((event.get("pathParameters") or {}).get("id"))
     if role != "duty_officer":
         return respond(403, {"error": "duty_officer group required"})
     params = event.get("pathParameters") or {}
@@ -85,6 +92,58 @@ def handler(event, context):
     if resource == "/cells/{cell}/restore":
         return move_cell(params.get("cell"), failover=False)
     return respond(404, {"error": "not found"})
+
+
+def zone_briefing(zone_id):
+    if os.environ.get("GEMINI_ENABLED") != "true":
+        return respond(503, {"error": "AI briefing is disabled"})
+    if not isinstance(zone_id, str) or len(zone_id) != 3 or not zone_id.startswith("Z") or not zone_id[1:].isdigit():
+        return respond(400, {"error": "invalid public zone"})
+    try:
+        zone = zones.get_item(Key={"zone_id": zone_id}).get("Item")
+        if not zone or zone.get("is_test"):
+            return respond(404, {"error": "zone not found"})
+        # Existing scan permission; no new read access to observations or resident data.
+        state = next(iter(scan_all(states, FilterExpression="zone_id = :z",
+                                  ExpressionAttributeValues={":z": zone_id})), None)
+        if not state or int(time.time()) - int(state.get("updated_at", 0)) > 300:
+            return respond(409, {"error": "Recent sensor evidence is unavailable; refresh before analysis"})
+        data = briefing.snapshot(zone, state, time.time())
+        model = os.environ.get("GEMINI_MODEL", "")
+        limits = ddb.Table(os.environ["RATELIMITS_TABLE"])
+        # Remove changing age/capture fields from fingerprint; snapshot timestamp stays visible.
+        fingerprint = {k: {a: b for a, b in v.items() if a != "age_seconds"} for k, v in data["facts"].items()}
+        digest = hashlib.sha256(json.dumps([zone_id, briefing.VERSION, model, fingerprint], sort_keys=True).encode()).hexdigest()
+        key = {"k": "ai-cache#" + digest}
+        cached = limits.get_item(Key=key).get("Item")
+        now = int(time.time())
+        if cached and int(cached["expires_at"]) > now:
+            return respond(200, json.loads(cached["result"]))
+        # Account-wide budgets work across concurrent Lambda instances; no paid retry loop.
+        for window, seconds, cap in (("minute", 60, 5), ("day", 86400, 30)):
+            try:
+                limits.update_item(Key={"k": f"ai-budget#{window}#{now // seconds}"},
+                    UpdateExpression="SET expires_at = :expiry ADD n :one",
+                    ConditionExpression="attribute_not_exists(n) OR n < :cap",
+                    ExpressionAttributeValues={":expiry": now + seconds * 2, ":one": 1, ":cap": cap})
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                    return respond(429, {"error": "AI briefing request limit reached; try later"})
+                raise
+        secret = json.loads(boto3.client("secretsmanager").get_secret_value(
+            SecretId=os.environ["GEMINI_SECRET_ARN"])["SecretString"])
+        api_key = secret.get("gemini_api_key")
+        if not api_key or not model:
+            return respond(503, {"error": "AI briefing is not configured"})
+        result = {**briefing.generate(data, api_key, model), "zone_id": zone_id,
+                  "captured_at": data["captured_at"], "evidence": data["facts"],
+                  "history_sufficient": data["history_sufficient"], "model": model,
+                  "notice": "AI-assisted evidence review. Not a validated forecast or warning decision."}
+        limits.put_item(Item={**key, "expires_at": now + 120, "result": json.dumps(result)})
+        return respond(200, result)
+    except Exception:
+        # Never log API keys, model prompts, personal data or provider error bodies.
+        return respond(503, {"error": "AI briefing unavailable; existing warning operations remain available"})
 
 
 def scan_all(table, **kwargs):

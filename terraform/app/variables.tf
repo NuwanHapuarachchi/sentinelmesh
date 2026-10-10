@@ -1,3 +1,19 @@
+variable "gemini_enabled" {
+  description = "Enable optional officer briefings; configure the key in the existing SMS secret first."
+  type        = bool
+  default     = false
+}
+
+variable "gemini_model" {
+  description = "Gemini generateContent model supporting JSON schema, available to your Google account."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.gemini_model == "" || can(regex("^gemini-[a-zA-Z0-9.-]+$", var.gemini_model))
+    error_message = "Use a Gemini model ID, not a URL."
+  }
+}
+
 variable "region" {
   description = "AWS region. The project account only allows ap-southeast-2."
   type        = string

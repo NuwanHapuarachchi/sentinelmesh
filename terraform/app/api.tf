@@ -109,9 +109,15 @@ module "console_api" {
     PREFIX            = var.prefix
     ACTIVE_CELLS      = join(",", local.active_cells)
     STANDBY_CELL      = local.standby_cell
+    GEMINI_ENABLED    = tostring(var.gemini_enabled)
+    GEMINI_MODEL      = var.gemini_model
+    GEMINI_SECRET_ARN = aws_secretsmanager_secret.sms.arn
+    RATELIMITS_TABLE  = local.t.ratelimits
   }
 
   policy_statements = [
+    { Effect = "Allow", Action = "secretsmanager:GetSecretValue", Resource = aws_secretsmanager_secret.sms.arn },
+    { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"], Resource = local.a.ratelimits },
     { Effect = "Allow", Action = ["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = local.a.zones },
     { Effect = "Allow", Action = "dynamodb:Scan", Resource = local.a.zone_state },
     { Effect = "Allow", Action = "dynamodb:Query", Resource = "${local.a.alerts}/index/by-day" },
@@ -264,6 +270,7 @@ locals {
     "/phone/ack"             = { post = "public" }
     "/sms/dlr"               = { post = "public" }
     "/zones"                 = { get = "console" }
+    "/zones/{id}/briefing"   = { post = "console" }
     "/alerts"                = { get = "console" }
     "/scenarios/{id}"        = { post = "console" }
     "/cells/{cell}/failover" = { post = "console" }

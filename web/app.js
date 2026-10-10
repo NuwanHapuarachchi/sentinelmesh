@@ -11,6 +11,42 @@ const ROLE_LABEL = { duty_officer: "duty officer", met: "meteorology", ems: "eme
 const DETAILED = ["duty_officer", "met", "ems"]; // roles the API gives per-zone rows and an alert list
 
 let cfg, geo, map, layers = {}, zones = {}, role = null, officer = false, selected = null;
+const briefings = {};
+let briefingPending = null;
+
+function briefingHtml(id) {
+  if (!cfg.gemini_enabled || !["duty_officer", "met"].includes(role)) return "";
+  const entry = briefings[id];
+  const data = entry && entry.updated === zones[id]?.updated_at ? entry.data : null;
+  const pending = briefingPending === id;
+  const sections = data ? ["insights", "anomalies", "outlook"].map((section) =>
+    `<h4>${({ insights: "Evidence insights", anomalies: "Anomaly review", outlook: "Trend outlook" })[section]}</h4><ul>${data[section].map((item) =>
+      `<li>${esc(item.text)} <small>Evidence: ${item.evidence.map(esc).join(", ")}</small></li>`).join("")}</ul>`).join("") : "";
+  return `<section class="ai-briefing" aria-label="AI zone briefing"><h3>AI zone briefing</h3>
+    <p>Sanitized sensor evidence is sent to Gemini. Read-only interpretation; not a validated forecast.</p>
+    <button id="analyzezone" ${briefingPending ? "disabled" : ""}>${pending ? "Analyzing…" : "Analyze zone"}</button>
+    <div role="status" aria-live="polite">${entry?.error ? esc(entry.error) : ""}${sections}</div>
+    ${data ? `<small>Evidence captured ${esc(new Date(data.captured_at * 1000).toLocaleString())} · ${esc(data.model)}</small>
+      <details><summary>Source readings and timestamps</summary><pre>${esc(JSON.stringify(data.evidence, null, 2))}</pre></details>` : ""}</section>`;
+}
+
+async function analyzeZone() {
+  const id = selected;
+  if (!id || briefingPending || !["duty_officer", "met"].includes(role)) return;
+  const updated = zones[id]?.updated_at;
+  briefingPending = id;
+  briefings[id] = { updated };
+  selectZone(id, true);
+  try {
+    const data = await api(`/zones/${encodeURIComponent(id)}/briefing`, { method: "POST", body: "{}" });
+    briefings[id] = { updated, data };
+  } catch (err) {
+    briefings[id] = { updated, error: err.message };
+  } finally {
+    briefingPending = null;
+    if (selected) selectZone(selected, true);
+  }
+}
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -134,7 +170,7 @@ function selectZone(id, quiet = false) {
     html += `<div class="bars">${Object.entries(z.contributions).map(([k, v]) =>
       `<span>${esc(k)}</span><i style="width:${Math.round((v / 0.4) * 100)}%"></i><span>${Number(v).toFixed(2)}</span>`).join("")}</div>`;
   }
-  $("zonedetail").innerHTML = html;
+  $("zonedetail").innerHTML = html + briefingHtml(id);
   if (!quiet) paint();
 }
 
@@ -184,6 +220,7 @@ async function loadAlertCounts() {
 function wireActions() {
   document.body.addEventListener("click", async (e) => {
     const t = e.target;
+    if (t.id === "analyzezone") { await analyzeZone(); return; }
     try {
       if (t.dataset.approve || t.dataset.reject) {
         const note = t.dataset.reject ? prompt("Why hold this back? This is recorded.") : "approved in console";

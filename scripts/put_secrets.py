@@ -29,7 +29,7 @@ def build(env, current):
     if not api_key:
         raise SystemExit("SMS_PROVIDER_API_KEY is not set (add it as a masked, protected CI/CD variable)")
     dlr = env.get("SMS_DLR_SECRET", "").strip() or current.get("dlr_secret") or secrets.token_urlsafe(32)
-    return {"api_key": api_key, "sender_id": env.get("SMS_SENDER_ID", "").strip(), "dlr_secret": dlr}
+    return {**current, "api_key": api_key, "sender_id": env.get("SMS_SENDER_ID", "").strip(), "dlr_secret": dlr}
 
 
 def main():

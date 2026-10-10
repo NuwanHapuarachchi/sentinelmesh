@@ -181,6 +181,7 @@ resource "aws_s3_object" "config" {
     cognito_domain = "https://${aws_cognito_user_pool_domain.officers.domain}.auth.${var.region}.amazoncognito.com"
     client_id      = aws_cognito_user_pool_client.console.id
     region         = var.region
+    gemini_enabled = var.gemini_enabled
     # The Android app reads these: guest identities that may only listen on sm/broadcast/* (mobile.tf).
     identity_pool_id = aws_cognito_identity_pool.app.id
     iot_endpoint     = data.aws_iot_endpoint.data.endpoint_address

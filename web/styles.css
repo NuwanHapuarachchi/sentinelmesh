@@ -100,3 +100,9 @@ nav button:hover { background: var(--paper); color: var(--ink); }
   .layout { grid-template-columns: 1fr; height: auto; }
   .mapwrap { height: 60vh; border-right: none; border-bottom: 1.5px solid var(--ink); }
 }
+/* Optional officer briefing shares the console palette and wraps on smaller screens. */
+.ai-briefing { border-top: 1px solid #cfdbe0; margin-top: 18px; padding-top: 14px; }
+.ai-briefing h4 { margin: 16px 0 6px; color: #2f6f8f; }
+.ai-briefing small { display: block; color: #4d6676; }
+.ai-briefing pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.ai-briefing button:disabled { opacity: .6; cursor: wait; }
