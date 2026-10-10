@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -118,7 +121,7 @@ fun MainScreen(resumeTick: Int) {
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
+        Box(Modifier.padding(pad).consumeWindowInsets(pad).fillMaxSize()) {
             screenState.SaveableStateProvider(tab) {
                 when (tab) {
                     0 -> PullToRefreshBox(isRefreshing = refreshing, onRefresh = { Sentinel.refreshNow() }) {
@@ -224,13 +227,14 @@ private fun HomeTab(s: Strings, lang: Lang, refreshFailed: Boolean, openMap: () 
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun AlertRow(m: AlertMsg, s: Strings, lang: Lang) {
     val zone = Sentinel.zone(m.zoneId)
     Row(Modifier.fillMaxWidth()) {
         Box(Modifier.width(6.dp).height(78.dp).clip(RoundedCornerShape(3.dp)).background(tierColor(m.tier)))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 TierPill(s.headline[m.tier] ?: m.tier, m.tier)
                 if (m.status != "Actual") {
                     Spacer(Modifier.width(6.dp))
@@ -245,7 +249,7 @@ fun AlertRow(m: AlertMsg, s: Strings, lang: Lang) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun MapTab(s: Strings) {
     val zones by Sentinel.zones.collectAsState()

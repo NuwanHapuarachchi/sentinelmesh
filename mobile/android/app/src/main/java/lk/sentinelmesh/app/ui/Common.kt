@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -137,7 +138,7 @@ fun TierPill(label: String, tier: String, blind: Boolean = false) {
 @Composable
 fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, color: Color = C.ink) {
     Button(
-        onClick = onClick, enabled = enabled, modifier = modifier.height(54.dp),
+        onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = 54.dp),
         shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = color, contentColor = Color.White),
     ) { Text(text, style = MaterialTheme.typography.titleMedium) }
 }
@@ -181,7 +182,7 @@ fun AreaPicker(
                     else permission.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
                 },
                 enabled = !locating && zones.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = C.river),
             ) {
                 Icon(Icons.Filled.LocationOn, null)
