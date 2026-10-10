@@ -27,6 +27,8 @@ Disable by setting `gemini_enabled=false` and applying. The core scoring, approv
 
 ## Verification
 
+On 2026-10-10, a live synthetic-evidence smoke test passed with `gemini-3.5-flash-lite`, using the same schema and output validation as the backend. The key was configured in the existing AWS secret, with other fields verified as preserved. Local deployment settings are in ignored `terraform/app/gemini.auto.tfvars`; CI must explicitly set the two `TF_VAR_gemini_*` variables because this local file is not pushed. This does not mean the feature branch has been deployed.
+
 Run Python unit tests, Node console tests, Ruff and Terraform formatting/validation in the normal CI environment. Provider tests use fake responses, never live alerts. A real Gemini smoke test and deployment require a configured key and explicit deployment review.
 
 Sources: https://ai.google.dev/gemini-api/docs/structured-output and https://ai.google.dev/gemini-api/docs/api-key
